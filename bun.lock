@@ -9,8 +9,8 @@
         "@mariozechner/pi-ai": "^0.71.1",
         "@mariozechner/pi-coding-agent": "^0.71.1",
         "@mariozechner/pi-tui": "^0.71.1",
-        "@sinclair/typebox": "^0.34.49",
         "@types/node": "^24.12.2",
+        "typebox": "^1.1.36",
         "typescript": "~5.9.3",
       },
       "peerDependencies": {
@@ -18,7 +18,7 @@
         "@mariozechner/pi-ai": "*",
         "@mariozechner/pi-coding-agent": "*",
         "@mariozechner/pi-tui": "*",
-        "@sinclair/typebox": "*",
+        "typebox": "*",
       },
     },
   },
@@ -152,8 +152,6 @@
     "@protobufjs/utf8": ["@protobufjs/utf8@1.1.0", "", {}, "sha512-Vvn3zZrhQZkkBE8LSuW3em98c0FwgO4nxzv6OdSxPKJIEKY2bGbHn+mhGIPerzI4twdxaP8/0+06HBpwf345Lw=="],
 
     "@silvia-odwyer/photon-node": ["@silvia-odwyer/photon-node@0.3.4", "", {}, "sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA=="],
-
-    "@sinclair/typebox": ["@sinclair/typebox@0.34.49", "", {}, "sha512-brySQQs7Jtn0joV8Xh9ZV/hZb9Ozb0pmazDIASBkYKCjXrXU3mpcFahmK/z4YDhGkQvP9mWJbVyahdtU5wQA+A=="],
 
     "@smithy/config-resolver": ["@smithy/config-resolver@4.4.16", "", { "dependencies": { "@smithy/node-config-provider": "^4.3.14", "@smithy/types": "^4.14.1", "@smithy/util-config-provider": "^4.2.2", "@smithy/util-endpoints": "^3.4.1", "@smithy/util-middleware": "^4.2.14", "tslib": "^2.6.2" } }, "sha512-GFlGPNLZKrGfqWpqVb31z7hvYCA9ZscfX1buYnvvMGcRYsQQnhH+4uN6mWWflcD5jB4OXP/LBrdpukEdjl41tg=="],
 
