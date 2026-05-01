@@ -1,6 +1,6 @@
 {
   "name": "tb-pi-package",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Extensions, subagents, and workflow prompts for the pi AI coding agent",
   "homepage": "https://github.com/theoklitosBam7/tb-pi-package#readme",
   "bugs": {
