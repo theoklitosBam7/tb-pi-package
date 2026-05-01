@@ -2,7 +2,7 @@
 name: architect
 description: Analyzes codebases to identify structural patterns, coupling issues, and architectural boundaries. Synthesizes exploration findings into actionable candidates and constraint documents.
 tools: read, grep, find, ls, bash
-model: openai-codex/gpt-5.4
+model: openai-codex/gpt-5.5
 subagent_type: analysis
 ---
 

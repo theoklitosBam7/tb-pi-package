@@ -2,7 +2,7 @@
 name: general-purpose
 description: General-purpose agent for analysis, research, documentation, and explanation tasks. Read-only - does not modify files.
 tools: read, grep, find, ls
-model: opencode-go/mimo-v2-omni
+model: opencode-go/mimo-v2.5
 subagent_type: general
 ---
 

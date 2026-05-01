@@ -15,7 +15,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
 - **Commands browser** — List all registered slash commands via `/commands`.
 - **7 built-in agents** — Scout, planner, architect, designer, reviewer, worker, and general-purpose — each tuned for a specific task.
-- **Workflow prompts** — Pre-built prompt templates for scout→plan→implement, implement→review, and standalone review.
+- **Workflow prompts** — Pre-built prompt templates for scout→plan→implement, implement→review, standalone review, and wiki generation.
 
 ## Installation
 
@@ -67,6 +67,7 @@ Workflow prompts in `prompts/` provide ready-made multi-agent patterns:
 | `implement` | Scout → Planner → Worker implements |
 | `implement-and-review` | Worker implements → Reviewer reviews → Worker applies feedback |
 | `review` | Standalone code review via the reviewer agent |
+| `generate-wiki` | Scout investigates repo → Worker generates and writes wiki pages to `wiki/` |
 
 ### Subagent Tool Examples
 

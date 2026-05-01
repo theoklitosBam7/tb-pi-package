@@ -2,7 +2,7 @@
 name: scout
 description: Fast codebase recon that returns compressed context for handoff to other agents
 tools: read, grep, find, ls, bash
-model: opencode-go/minimax-m2.7
+model: opencode-go/deepseek-v4-flash
 subagent_type: reconnaissance
 ---
 

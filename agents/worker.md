@@ -1,7 +1,7 @@
 ---
 name: worker
 description: General-purpose subagent with full capabilities, isolated context
-model: openai-codex/gpt-5.3-codex
+model: opencode-go/deepseek-v4-pro
 subagent_type: implementation
 ---
 
