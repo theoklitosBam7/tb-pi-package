@@ -24,10 +24,7 @@ export interface AgentDiscoveryResult {
   projectAgentsDir: string | null;
 }
 
-function loadAgentsFromDir(
-  dir: string,
-  source: "user" | "project",
-): AgentConfig[] {
+function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
   const agents: AgentConfig[] = [];
 
   if (!fs.existsSync(dir)) {
@@ -53,8 +50,7 @@ function loadAgentsFromDir(
       continue;
     }
 
-    const { frontmatter, body } =
-      parseFrontmatter<Record<string, string>>(content);
+    const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
 
     if (!frontmatter.name || !frontmatter.description) {
       continue;
@@ -100,19 +96,13 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
   }
 }
 
-export function discoverAgents(
-  cwd: string,
-  scope: AgentScope,
-): AgentDiscoveryResult {
+export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
   const userDir = path.join(getAgentDir(), "agents");
   const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
-  const userAgents =
-    scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
+  const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
   const projectAgents =
-    scope === "user" || !projectAgentsDir
-      ? []
-      : loadAgentsFromDir(projectAgentsDir, "project");
+    scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
 
   const agentMap = new Map<string, AgentConfig>();
 

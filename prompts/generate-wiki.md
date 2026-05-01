@@ -2,6 +2,7 @@
 description: Generate comprehensive wiki documentation for a repository
 argument-hint: "[repo-path] [--update page... | --all]"
 ---
+
 Use the subagent tool with the chain parameter to execute this workflow.
 
 If the user passes `--all`, regenerate every wiki page (overwrite all existing files).
@@ -18,7 +19,6 @@ If no update flags are given, only generate missing pages (skip existing).
    - Whether a `wiki/` directory already exists and which of these files are present: `Home.md`, `Architecture.md`, `Setup-and-Installation.md`, `API-Reference.md`, `Development-Guide.md`, `Deployment.md`
 
 2. Then, use the "worker" agent to create the wiki documentation from the scout's findings (use {previous} placeholder). The expected pages are:
-
    - `wiki/Home.md` — One-paragraph project summary, key features, and a quick-start example
    - `wiki/Architecture.md` — High-level design, component relationships, data flow, key design decisions. Use Mermaid diagrams where possible
    - `wiki/Setup-and-Installation.md` — Prerequisites, step-by-step install, configuration, verification
@@ -33,11 +33,11 @@ If no update flags are given, only generate missing pages (skip existing).
 
    After writing, report a summary table:
 
-   | Page | Status |
-   |------|--------|
-   | Home | created / updated / skipped (already exists) |
-   | Architecture | ... |
-   | ... | ... |
+   | Page         | Status                                       |
+   | ------------ | -------------------------------------------- |
+   | Home         | created / updated / skipped (already exists) |
+   | Architecture | ...                                          |
+   | ...          | ...                                          |
 
    If any pages were skipped because they already exist, tell the user:
    "To update existing pages, run: `/generate-wiki --update <page-name>` or `/generate-wiki --all`"

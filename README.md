@@ -36,38 +36,38 @@ Once installed, the package's extensions, agents, and prompts are available auto
 
 ### Extensions
 
-| Extension | Tool(s) | Command | Description |
-|-----------|---------|---------|-------------|
-| `subagent` | `agent` | — | Spawn isolated agent processes for single, parallel, or chained tasks |
-| `web-search` | `web_search`, `web_fetch` | — | Search the web and fetch page content |
-| `list-agents` | `list_agents` | `/agents` | Discover and browse agent definitions |
-| `commands` | — | `/commands` | List all registered slash commands |
+| Extension     | Tool(s)                   | Command     | Description                                                           |
+| ------------- | ------------------------- | ----------- | --------------------------------------------------------------------- |
+| `subagent`    | `agent`                   | —           | Spawn isolated agent processes for single, parallel, or chained tasks |
+| `web-search`  | `web_search`, `web_fetch` | —           | Search the web and fetch page content                                 |
+| `list-agents` | `list_agents`             | `/agents`   | Discover and browse agent definitions                                 |
+| `commands`    | —                         | `/commands` | List all registered slash commands                                    |
 
 ### Agents
 
 Agents are defined as Markdown files with frontmatter in `agents/`. Each agent has a specialized role, tool set, and model:
 
-| Agent | Type | Role |
-|-------|------|------|
-| `scout` | `reconnaissance` | Fast codebase recon, returns compressed context for handoff |
-| `planner` | `planning` | Creates implementation plans from context and requirements |
-| `architect` | `analysis` | Analyzes structure, coupling, and architectural boundaries |
-| `designer` | `analysis` | Proposes interface designs under specific constraints |
-| `reviewer` | `review` | Code review for quality, security, and maintainability |
-| `worker` | `implementation` | General-purpose agent with full file system capabilities |
-| `general-purpose` | `general` | Read-only analysis, research, documentation, and explanation |
+| Agent             | Type             | Role                                                         |
+| ----------------- | ---------------- | ------------------------------------------------------------ |
+| `scout`           | `reconnaissance` | Fast codebase recon, returns compressed context for handoff  |
+| `planner`         | `planning`       | Creates implementation plans from context and requirements   |
+| `architect`       | `analysis`       | Analyzes structure, coupling, and architectural boundaries   |
+| `designer`        | `analysis`       | Proposes interface designs under specific constraints        |
+| `reviewer`        | `review`         | Code review for quality, security, and maintainability       |
+| `worker`          | `implementation` | General-purpose agent with full file system capabilities     |
+| `general-purpose` | `general`        | Read-only analysis, research, documentation, and explanation |
 
 ### Prompts
 
 Workflow prompts in `prompts/` provide ready-made multi-agent patterns:
 
-| Prompt | Workflow |
-|--------|----------|
-| `scout-and-plan` | Scout gathers context → Planner creates plan |
-| `implement` | Scout → Planner → Worker implements |
-| `implement-and-review` | Worker implements → Reviewer reviews → Worker applies feedback |
-| `review` | Standalone code review via the reviewer agent |
-| `generate-wiki` | Scout investigates repo → Worker generates and writes wiki pages to `wiki/` |
+| Prompt                 | Workflow                                                                    |
+| ---------------------- | --------------------------------------------------------------------------- |
+| `scout-and-plan`       | Scout gathers context → Planner creates plan                                |
+| `implement`            | Scout → Planner → Worker implements                                         |
+| `implement-and-review` | Worker implements → Reviewer reviews → Worker applies feedback              |
+| `review`               | Standalone code review via the reviewer agent                               |
+| `generate-wiki`        | Scout investigates repo → Worker generates and writes wiki pages to `wiki/` |
 
 ### Subagent Tool Examples
 

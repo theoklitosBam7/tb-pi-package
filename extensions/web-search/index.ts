@@ -11,7 +11,10 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
       max_results: Type.Optional(
-        Type.Number({ description: "Maximum number of results to return (default: 8)", default: 8 }),
+        Type.Number({
+          description: "Maximum number of results to return (default: 8)",
+          default: 8,
+        }),
       ),
     }),
     async execute(_id, params, signal, _onUpdate, _ctx) {
@@ -28,10 +31,17 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       url: Type.String({ description: "URL to fetch" }),
       max_length: Type.Optional(
-        Type.Number({ description: "Maximum characters to return per chunk (default: 10000)", default: 10000 }),
+        Type.Number({
+          description: "Maximum characters to return per chunk (default: 10000)",
+          default: 10000,
+        }),
       ),
       offset: Type.Optional(
-        Type.Number({ description: "Character offset to start from (for paginating through long content). Use 0 for the start.", default: 0 }),
+        Type.Number({
+          description:
+            "Character offset to start from (for paginating through long content). Use 0 for the start.",
+          default: 0,
+        }),
       ),
     }),
     async execute(_id, params, signal, _onUpdate, _ctx) {
@@ -42,14 +52,21 @@ export default function (pi: ExtensionAPI) {
 
 // --- web_search implementation ---
 
-function textResult<TDetails = unknown>(text: string, details?: TDetails): AgentToolResult<TDetails> {
+function textResult<TDetails = unknown>(
+  text: string,
+  details?: TDetails,
+): AgentToolResult<TDetails> {
   return {
     content: [{ type: "text", text }],
     details,
   };
 }
 
-async function webSearch(query: string, maxResults: number, signal?: AbortSignal): Promise<AgentToolResult<{ query: string; results: SearchResult[] }>> {
+async function webSearch(
+  query: string,
+  maxResults: number,
+  signal?: AbortSignal,
+): Promise<AgentToolResult<{ query: string; results: SearchResult[] }>> {
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const res = await fetch(url, {
     signal,
@@ -84,13 +101,22 @@ async function webFetch(
   maxLength: number,
   offset: number,
   signal?: AbortSignal,
-): Promise<AgentToolResult<{ url: string; offset: number; totalLength: number; chunkLength: number; truncated: boolean }>> {
+): Promise<
+  AgentToolResult<{
+    url: string;
+    offset: number;
+    totalLength: number;
+    chunkLength: number;
+    truncated: boolean;
+  }>
+> {
   let res: Response;
   try {
     res = await fetch(url, {
       signal,
       headers: {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         Accept: "text/html,application/xhtml+xml,*/*",
       },
       redirect: "follow",
@@ -108,9 +134,7 @@ async function webFetch(
   const body = await res.text();
   const finalUrl = res.url; // follows redirects
 
-  const fullText = contentType.includes("text/html")
-    ? htmlToText(body)
-    : body;
+  const fullText = contentType.includes("text/html") ? htmlToText(body) : body;
 
   const totalLength = fullText.length;
   const chunk = fullText.slice(offset, offset + maxLength);
@@ -134,7 +158,10 @@ async function webFetch(
 
 function htmlToText(html: string): string {
   // Remove script, style, nav, footer, header, aside blocks
-  let cleaned = html.replace(/<(script|style|nav|footer|header|aside|noscript)[\s\S]*?<\/\1>/gi, "");
+  let cleaned = html.replace(
+    /<(script|style|nav|footer|header|aside|noscript)[\s\S]*?<\/\1>/gi,
+    "",
+  );
   // Try to extract <main> or <article> content if present
   const mainMatch = cleaned.match(/<(main|article)[\s>][\s\S]*?<\/\1>/i);
   if (mainMatch) cleaned = mainMatch[0];
@@ -144,7 +171,10 @@ function htmlToText(html: string): string {
   // Strip remaining tags
   cleaned = stripHtml(cleaned);
   // Collapse whitespace
-  cleaned = cleaned.replace(/\n{3,}/g, "\n\n").replace(/^[ \t]+/gm, "").trim();
+  cleaned = cleaned
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^[ \t]+/gm, "")
+    .trim();
   return cleaned;
 }
 

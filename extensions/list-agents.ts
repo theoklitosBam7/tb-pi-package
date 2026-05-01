@@ -13,10 +13,7 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import {
-  discoverAgents,
-  type AgentConfig,
-} from "./subagent/agents.js";
+import { discoverAgents, type AgentConfig } from "./subagent/agents.js";
 
 /**
  * Agent definition for display
