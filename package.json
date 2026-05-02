@@ -26,6 +26,7 @@
   },
   "type": "module",
   "scripts": {
+    "prepare": "simple-git-hooks",
     "typecheck": "tsc -p tsconfig.json",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
@@ -33,15 +34,16 @@
     "lint:fix": "oxlint --fix"
   },
   "devDependencies": {
-    "@mariozechner/pi-agent-core": "^0.71.1",
-    "@mariozechner/pi-ai": "^0.71.1",
-    "@mariozechner/pi-coding-agent": "^0.71.1",
-    "@mariozechner/pi-tui": "^0.71.1",
+    "@mariozechner/pi-agent-core": "^0.72.1",
+    "@mariozechner/pi-ai": "^0.72.1",
+    "@mariozechner/pi-coding-agent": "^0.72.1",
+    "@mariozechner/pi-tui": "^0.72.1",
     "@types/node": "^24.12.2",
     "nano-staged": "^1.0.2",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",
-    "typebox": "^1.1.36",
+    "simple-git-hooks": "^2.13.1",
+    "typebox": "^1.1.37",
     "typescript": "~5.9.3"
   },
   "peerDependencies": {
@@ -50,6 +52,9 @@
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
     "typebox": "*"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "bun run nano-staged"
   },
   "nano-staged": {
     "*": "oxfmt --no-error-on-unmatched-pattern",
