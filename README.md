@@ -121,6 +121,7 @@ tb-pi-package/
 git clone https://github.com/theoklitosBam7/tb-pi-package.git
 cd tb-pi-package
 bun install
+bun run hooks:setup
 ```
 
 ### Type Checking
