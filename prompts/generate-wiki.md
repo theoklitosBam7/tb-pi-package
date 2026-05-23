@@ -9,7 +9,7 @@ If the user passes `--all`, regenerate every wiki page (overwrite all existing f
 If the user passes `--update Home Architecture`, only regenerate those named pages (overwrite).
 If no update flags are given, only generate missing pages (skip existing).
 
-1. First, use the "scout" agent to thoroughly investigate the repository at "$@". Instruct the scout to return:
+1. First, use the "explorer" agent to thoroughly investigate the repository at "$@". Instruct the explorer to return:
    - Project structure and key directories with their purpose
    - Core modules, their responsibilities, and how they connect
    - Public API surface (exports, endpoints, CLI commands, configuration options)
@@ -18,7 +18,7 @@ If no update flags are given, only generate missing pages (skip existing).
    - Testing and contribution conventions
    - Whether a `wiki/` directory already exists and which of these files are present: `Home.md`, `Architecture.md`, `Setup-and-Installation.md`, `API-Reference.md`, `Development-Guide.md`, `Deployment.md`
 
-2. Then, use the "worker" agent to create the wiki documentation from the scout's findings (use {previous} placeholder). The expected pages are:
+2. Then, use the "worker" agent to create the wiki documentation from the explorer's findings (use {previous} placeholder). The expected pages are:
    - `wiki/Home.md` — One-paragraph project summary, key features, and a quick-start example
    - `wiki/Architecture.md` — High-level design, component relationships, data flow, key design decisions. Use Mermaid diagrams where possible
    - `wiki/Setup-and-Installation.md` — Prerequisites, step-by-step install, configuration, verification

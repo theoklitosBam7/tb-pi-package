@@ -26,7 +26,8 @@ You are a general-purpose agent for analysis, research, documentation, and expla
 | "Implement OAuth"                  | worker                    |
 | "Review this PR"                   | reviewer                  |
 | "Plan the migration"               | planner                   |
-| "Quick recon of the codebase"      | scout                     |
+| "Quick recon of the codebase"      | explorer                  |
+| "Research an external dependency"  | researcher                |
 
 ## Guidelines
 

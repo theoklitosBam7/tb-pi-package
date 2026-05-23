@@ -14,8 +14,8 @@ This package extends pi with custom tools, slash commands, specialized subagents
 - **Web search & fetch** — Search DuckDuckGo and fetch page content directly from pi.
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
 - **Commands browser** — List all registered slash commands via `/commands`.
-- **7 built-in agents** — Scout, planner, architect, designer, reviewer, worker, and general-purpose — each tuned for a specific task.
-- **Workflow prompts** — Pre-built prompt templates for scout→plan→implement, implement→review, standalone review, and wiki generation.
+- **8 built-in agents** — Explorer, planner, architect, designer, reviewer, worker, general-purpose, and researcher — each tuned for a specific task.
+- **Workflow prompts** — Pre-built prompt templates for explorer→plan→implement, implement→review, standalone review, and wiki generation.
 
 ## Installation
 
@@ -47,43 +47,44 @@ Once installed, the package's extensions, agents, and prompts are available auto
 
 Agents are defined as Markdown files with frontmatter in `agents/`. Each agent has a specialized role, tool set, and model:
 
-| Agent             | Type             | Role                                                         |
-| ----------------- | ---------------- | ------------------------------------------------------------ |
-| `scout`           | `reconnaissance` | Fast codebase recon, returns compressed context for handoff  |
-| `planner`         | `planning`       | Creates implementation plans from context and requirements   |
-| `architect`       | `analysis`       | Analyzes structure, coupling, and architectural boundaries   |
-| `designer`        | `analysis`       | Proposes interface designs under specific constraints        |
-| `reviewer`        | `review`         | Code review for quality, security, and maintainability       |
-| `worker`          | `implementation` | General-purpose agent with full file system capabilities     |
-| `general-purpose` | `general`        | Read-only analysis, research, documentation, and explanation |
+| Agent             | Type             | Role                                                                                    |
+| ----------------- | ---------------- | --------------------------------------------------------------------------------------- |
+| `explorer`        | `exploration`    | Fast codebase exploration, returns compressed context for handoff                       |
+| `planner`         | `planning`       | Creates implementation plans from context and requirements                              |
+| `researcher`      | `research`       | Reads external docs and dependency source code; clones repos to temp dir for inspection |
+| `architect`       | `analysis`       | Analyzes structure, coupling, and architectural boundaries                              |
+| `designer`        | `analysis`       | Proposes interface designs under specific constraints                                   |
+| `reviewer`        | `review`         | Code review for quality, security, and maintainability                                  |
+| `worker`          | `implementation` | General-purpose agent with full file system capabilities                                |
+| `general-purpose` | `general`        | Read-only analysis, research, documentation, and explanation                            |
 
 ### Prompts
 
 Workflow prompts in `prompts/` provide ready-made multi-agent patterns:
 
-| Prompt                 | Workflow                                                                    |
-| ---------------------- | --------------------------------------------------------------------------- |
-| `scout-and-plan`       | Scout gathers context → Planner creates plan                                |
-| `implement`            | Scout → Planner → Worker implements                                         |
-| `implement-and-review` | Worker implements → Reviewer reviews → Worker applies feedback              |
-| `review`               | Standalone code review via the reviewer agent                               |
-| `generate-wiki`        | Scout investigates repo → Worker generates and writes wiki pages to `wiki/` |
+| Prompt                 | Workflow                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------ |
+| `explorer-and-plan`    | Explorer gathers context → Planner creates plan                                |
+| `implement`            | Explorer → Planner → Worker implements                                         |
+| `implement-and-review` | Worker implements → Reviewer reviews → Worker applies feedback                 |
+| `review`               | Standalone code review via the reviewer agent                                  |
+| `generate-wiki`        | Explorer investigates repo → Worker generates and writes wiki pages to `wiki/` |
 
 ### Subagent Tool Examples
 
 ```
 # Single task
-agent({ agent: "scout", task: "Explore the auth module and summarize its structure" })
+agent({ agent: "explorer", task: "Explore the auth module and summarize its structure" })
 
 # Parallel tasks
 agent({ tasks: [
-  { agent: "scout", task: "Explore the API layer" },
-  { agent: "scout", task: "Explore the database layer" }
+  { agent: "explorer", task: "Explore the API layer" },
+  { agent: "explorer", task: "Explore the database layer" }
 ]})
 
 # Chained workflow (output of step N feeds into step N+1 via {previous})
 agent({ chain: [
-  { agent: "scout", task: "Investigate the caching module" },
+  { agent: "explorer", task: "Investigate the caching module" },
   { agent: "planner", task: "Create an implementation plan for adding TTL support based on: {previous}" },
   { agent: "worker", task: "Implement the plan from: {previous}" }
 ]})

@@ -39,13 +39,20 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
   }
 
   for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+
+    // Recurse into subdirectories (real dirs or symlinks to dirs)
+    if (isDirectory(fullPath)) {
+      agents.push(...loadAgentsFromDir(fullPath, source));
+      continue;
+    }
+
     if (!entry.name.endsWith(".md")) continue;
     if (!entry.isFile() && !entry.isSymbolicLink()) continue;
 
-    const filePath = path.join(dir, entry.name);
     let content: string;
     try {
-      content = fs.readFileSync(filePath, "utf-8");
+      content = fs.readFileSync(fullPath, "utf-8");
     } catch {
       continue;
     }
@@ -69,7 +76,7 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
       subagentType: frontmatter.subagent_type,
       systemPrompt: body,
       source,
-      filePath,
+      filePath: fullPath,
     });
   }
 
