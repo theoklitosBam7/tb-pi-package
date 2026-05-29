@@ -33,12 +33,16 @@
     "lint": "oxlint",
     "lint:fix": "oxlint --fix"
   },
+  "dependencies": {
+    "turndown": "^7.2.4"
+  },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^0.74.0",
     "@earendil-works/pi-ai": "^0.74.0",
     "@earendil-works/pi-coding-agent": "^0.74.0",
     "@earendil-works/pi-tui": "^0.74.0",
     "@types/node": "^24.12.3",
+    "@types/turndown": "^5.0.6",
     "nano-staged": "^1.0.2",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.63.0",
