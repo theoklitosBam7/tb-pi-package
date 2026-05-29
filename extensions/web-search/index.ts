@@ -1,5 +1,6 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { htmlToMarkdown } from "./htmlToMarkdown.js";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -26,7 +27,7 @@ export default function (pi: ExtensionAPI) {
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch a web page by URL and return its text content. For HTML pages, extracts readable text. For raw files (markdown, text, JSON), returns content as-is. Use this to read the full content of a page found via web_search.",
+      "Fetch a web page by URL and return its content. For HTML/XHTML pages, converts to Markdown (headings, lists, links, code blocks). For raw files (markdown, text, JSON), returns content as-is. Use this to read the full content of a page found via web_search.",
     promptSnippet: "Fetch and read the full content of a web page by URL",
     parameters: Type.Object({
       url: Type.String({ description: "URL to fetch" }),
@@ -134,7 +135,7 @@ async function webFetch(
   const body = await res.text();
   const finalUrl = res.url; // follows redirects
 
-  const fullText = contentType.includes("text/html") ? htmlToText(body) : body;
+  const fullText = isHtmlContentType(contentType) ? htmlToMarkdown(body) : body;
 
   const totalLength = fullText.length;
   const chunk = fullText.slice(offset, offset + maxLength);
@@ -156,26 +157,9 @@ async function webFetch(
   });
 }
 
-function htmlToText(html: string): string {
-  // Remove script, style, nav, footer, header, aside blocks
-  let cleaned = html.replace(
-    /<(script|style|nav|footer|header|aside|noscript)[\s\S]*?<\/\1>/gi,
-    "",
-  );
-  // Try to extract <main> or <article> content if present
-  const mainMatch = cleaned.match(/<(main|article)[\s>][\s\S]*?<\/\1>/i);
-  if (mainMatch) cleaned = mainMatch[0];
-  // Convert block elements to newlines
-  cleaned = cleaned.replace(/<\/(p|div|h[1-6]|li|tr|br)\s*>/gi, "\n");
-  cleaned = cleaned.replace(/<br\s*\/?>/gi, "\n");
-  // Strip remaining tags
-  cleaned = stripHtml(cleaned);
-  // Collapse whitespace
-  cleaned = cleaned
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/^[ \t]+/gm, "")
-    .trim();
-  return cleaned;
+function isHtmlContentType(contentType: string): boolean {
+  const lower = contentType.toLowerCase();
+  return lower.includes("text/html") || lower.includes("application/xhtml+xml");
 }
 
 interface SearchResult {
