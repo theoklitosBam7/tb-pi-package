@@ -11,7 +11,8 @@ const turndown = new TurndownService({
  *
  * Pre-processing: strips noise elements (script, style, nav, footer, header,
  * aside, noscript), then extracts <main> or <article> content if present.
- * Then runs Turndown to produce Markdown.
+ * Post-processing: strips empty image references and empty links from the
+ * Turndown output, then collapses excessive blank lines.
  */
 export function htmlToMarkdown(html: string): string {
   // Remove noise elements
@@ -24,7 +25,13 @@ export function htmlToMarkdown(html: string): string {
   const mainMatch = cleaned.match(/<(main|article)[\s>][\s\S]*?<\/\1>/i);
   if (mainMatch) cleaned = mainMatch[0];
 
-  const markdown = turndown.turndown(cleaned);
+  let markdown = turndown.turndown(cleaned);
+
+  // Strip empty image references (e.g. ![](s.gif))
+  markdown = markdown.replace(/!\[\s*\]\([^)]+\)/g, "");
+
+  // Strip empty links (e.g. [ ](url) or [](url))
+  markdown = markdown.replace(/\[\s*\]\([^)]+\)/g, "");
 
   // Collapse excessive blank lines
   return markdown.replace(/\n{3,}/g, "\n\n").trim();
