@@ -1,0 +1,87 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+title: "feat: "
+labels: ["enhancement"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please describe what you'd like to see.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the package should change?
+      options:
+        - Extension
+        - Agent
+        - Prompt
+        - Skill
+        - Theme
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Feature Description
+      description: A clear description of the proposed feature
+      placeholder: Describe the feature in detail
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem It Solves
+      description: What problem does this solve? Why is it needed?
+      placeholder: The problem this solves...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: How should it work in pi?
+      placeholder: Describe the proposed solution (tool behavior, agent role, prompt flow, etc.)
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Any alternative approaches you considered?
+      placeholder: Alternatives...
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Example Usage / Sketches
+      description: Example agent frontmatter, prompt flow, or tool invocation if applicable
+      placeholder: |
+        # Example agent task or prompt snippet
+        agent({ agent: "explorer", task: "..." })
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature?
+      options:
+        - Low - Nice to have
+        - Medium - Would improve workflows
+        - High - Would significantly improve daily use
+        - Critical - Must have for next release
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
+      placeholder: Additional context...

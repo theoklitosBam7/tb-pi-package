@@ -1,0 +1,106 @@
+name: Bug Report
+description: Report something that isn't working correctly
+title: "bug: "
+labels: ["bug"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the package is affected?
+      options:
+        - Extension
+        - Agent
+        - Prompt
+        - Skill
+        - Theme
+        - Install / packaging
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear description of the bug
+      placeholder: Describe the bug in detail
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How to reproduce this bug in pi
+      placeholder: |
+        1. Install with `pi install ...`
+        2. Run `pi` in a project
+        3. Invoke tool / agent / prompt ...
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen
+      placeholder: Expected behavior...
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened
+      placeholder: Actual behavior...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How severe is this bug?
+      options:
+        - Low - Minor inconvenience
+        - Medium - Workaround exists
+        - High - Blocks important functionality
+        - Critical - Package unusable / data loss
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: pi, Node, OS, package version, install method, etc.
+      placeholder: |
+        - pi version (https://github.com/earendil-works/pi/tree/main/packages/coding-agent):
+        - tb-pi-package version or commit:
+        - Install: global / local / session (`pi -e`)
+        - Node:
+        - OS:
+        - Package manager (bun/npm/pnpm):
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Error Output
+      description: Paste relevant terminal output or stack traces
+      placeholder: Paste logs here
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
+      placeholder: Additional context...

@@ -1,6 +1,6 @@
 # tb-pi-package
 
-A collection of extensions and agent definitions for [pi](https://github.com/mariozechner/pi-coding-agent) — the AI coding agent.
+A collection of extensions and agent definitions for [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) — the AI coding agent.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -104,6 +104,7 @@ tb-pi-package/
 │   └── web-search/      # web_search & web_fetch tools
 │       └── index.ts
 ├── prompts/             # Workflow prompt templates
+├── .github/             # Issue/PR templates and release workflow
 ├── package.json
 └── tsconfig.json
 ```
@@ -112,6 +113,7 @@ tb-pi-package/
 
 ### Requirements
 
+- [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) — install separately before using this package
 - [Node.js](https://nodejs.org/) >= 22.12.0
 - [Bun](https://bun.sh/)
 
@@ -124,11 +126,17 @@ bun install
 bun run hooks:setup
 ```
 
-### Type Checking
+### Checks
 
 ```bash
-bun run typecheck
+bun fmt
+bun lint:fix
+bun typecheck
 ```
+
+## Contributing
+
+Use the [issue templates](https://github.com/theoklitosBam7/tb-pi-package/issues/new/choose) for bugs and feature requests. Pull requests should follow [`.github/pull_request_template.md`](.github/pull_request_template.md). Run the checks above before opening a PR.
 
 ## License
 
