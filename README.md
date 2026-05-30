@@ -114,7 +114,7 @@ tb-pi-package/
 ### Requirements
 
 - [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) — install separately before using this package
-- [Node.js](https://nodejs.org/) >= 22.12.0
+- [Node.js](https://nodejs.org/) >= 22.22.3
 - [Bun](https://bun.sh/)
 
 ### Setup
