@@ -86,4 +86,51 @@ describe("htmlToMarkdown", () => {
     expect(md).toContain("# Page Title");
     expect(md).toContain("Body copy");
   });
+
+  it("strips empty image references", () => {
+    const html = '<p><img src="s.gif" /></p><p>Real content</p>';
+    const md = htmlToMarkdown(html);
+    expect(md).toContain("Real content");
+    expect(md).not.toContain("![](");
+  });
+
+  it("strips empty links", () => {
+    const html = '<p><a href="vote?id=1"></a></p><p>Real content</p>';
+    const md = htmlToMarkdown(html);
+    expect(md).toContain("Real content");
+    expect(md).not.toContain("[](");
+  });
+
+  it("preserves normal images with alt text", () => {
+    const html = '<p><img src="photo.jpg" alt="A photo" /></p>';
+    const md = htmlToMarkdown(html);
+    expect(md).toContain("![A photo](photo.jpg)");
+  });
+
+  it("preserves normal links with display text", () => {
+    const html = '<p><a href="https://example.com">Example</a></p>';
+    const md = htmlToMarkdown(html);
+    expect(md).toContain("[Example](https://example.com)");
+  });
+
+  it("strips HN-style UI noise (regression test)", () => {
+    // Real-world Hacker News HTML patterns that produce empty links/images
+    const html = `
+      <table>
+        <tr>
+          <td><a href="https://news.ycombinator.com"><img src="y18.svg" width="18" height="18"></a></td>
+          <td><b><a href="news">Hacker News</a></b></td>
+        </tr>
+      </table>
+      <a href="vote?id=48334048&amp;how=up&amp;goto=news"><div class="votearrow" title="upvote"></div></a>
+      <a href="https://ziglang.org/devlog/2026/#2026-05-26">Zig: Build System Reworked</a>
+    `;
+    const md = htmlToMarkdown(html);
+    expect(md).toContain("**[Hacker News](news)**");
+    expect(md).toContain(
+      "[Zig: Build System Reworked](https://ziglang.org/devlog/2026/#2026-05-26)",
+    );
+    expect(md).not.toContain("y18.svg");
+    expect(md).not.toContain("vote?id=48334048");
+  });
 });
