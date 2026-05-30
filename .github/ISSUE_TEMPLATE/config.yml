@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: pi documentation
+    url: https://github.com/earendil-works/pi/tree/main/packages/coding-agent
+    about: Questions about pi itself (install, config, upstream behavior)
+  - name: Installation & usage
+    url: https://github.com/theoklitosBam7/tb-pi-package#readme
+    about: How to install and use this package
+  - name: Search existing issues
+    url: https://github.com/theoklitosBam7/tb-pi-package/issues
+    about: Check whether your report or request was already filed
