@@ -1,4 +1,5 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { htmlToMarkdown } from "./htmlToMarkdown.js";
 
@@ -18,6 +19,13 @@ export default function (pi: ExtensionAPI) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("web_search ")) + theme.fg("toolOutput", args.query),
+        0,
+        0,
+      );
+    },
     async execute(_id, params, signal, _onUpdate, _ctx) {
       return webSearch(params.query, params.max_results ?? 8, signal);
     },
@@ -45,6 +53,13 @@ export default function (pi: ExtensionAPI) {
         }),
       ),
     }),
+    renderCall(args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("web_fetch ")) + theme.fg("toolOutput", args.url),
+        0,
+        0,
+      );
+    },
     async execute(_id, params, signal, _onUpdate, _ctx) {
       return webFetch(params.url, params.max_length ?? 10000, params.offset ?? 0, signal);
     },
