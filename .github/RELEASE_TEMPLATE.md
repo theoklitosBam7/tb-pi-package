@@ -17,7 +17,7 @@ Copy this template when drafting a new release, then replace the placeholders.
 - **Updated agent model assignments** — List each changed agent and its old → new model.
   - \`agent-name\`: \`old-model\` → \`new-model\`
 - **Dependency pinning / bumps** — What changed and why (e.g., pinned from \`latest\` to \`^x.y.z\`).
-- **Tooling bumps** — Runtime or package manager versions (e.g., bun \`1.3.12\` → \`1.3.13\`).
+- **Tooling bumps** — Runtime or package manager versions (e.g., pnpm \`11.20.0\` → \`11.20.1\`).
 
 ## Bug Fixes
 
