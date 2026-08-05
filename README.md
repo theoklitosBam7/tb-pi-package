@@ -14,7 +14,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 - **Web search & fetch** — Search DuckDuckGo and fetch page content directly from pi.
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
 - **Commands browser** — List all registered slash commands via `/commands`.
-- **8 built-in agents** — Explorer, planner, architect, designer, reviewer, worker, general-purpose, and researcher — each tuned for a specific task.
+- **7 built-in agents** — Explorer, planner, architect, designer, reviewer, worker, and researcher — each tuned for a specific task.
 - **Workflow prompts** — Pre-built prompt templates for explorer→plan→implement, implement→review, standalone review, and wiki generation.
 
 ## Installation
@@ -47,16 +47,15 @@ Once installed, the package's extensions, agents, and prompts are available auto
 
 Agents are defined as Markdown files with frontmatter in `agents/`. Each agent has a specialized role, tool set, and model:
 
-| Agent             | Type             | Role                                                                                    |
-| ----------------- | ---------------- | --------------------------------------------------------------------------------------- |
-| `explorer`        | `exploration`    | Fast codebase exploration, returns compressed context for handoff                       |
-| `planner`         | `planning`       | Creates implementation plans from context and requirements                              |
-| `researcher`      | `research`       | Reads external docs and dependency source code; clones repos to temp dir for inspection |
-| `architect`       | `analysis`       | Analyzes structure, coupling, and architectural boundaries                              |
-| `designer`        | `analysis`       | Proposes interface designs under specific constraints                                   |
-| `reviewer`        | `review`         | Code review for quality, security, and maintainability                                  |
-| `worker`          | `implementation` | General-purpose agent with full file system capabilities                                |
-| `general-purpose` | `general`        | Read-only analysis, research, documentation, and explanation                            |
+| Agent        | Type             | Role                                                                                    |
+| ------------ | ---------------- | --------------------------------------------------------------------------------------- |
+| `explorer`   | `exploration`    | Fast codebase exploration, returns compressed context for handoff                       |
+| `planner`    | `planning`       | Creates implementation plans from context and requirements                              |
+| `researcher` | `research`       | Reads external docs and dependency source code; clones repos to temp dir for inspection |
+| `architect`  | `analysis`       | Analyzes structure, coupling, and architectural boundaries                              |
+| `designer`   | `analysis`       | Proposes interface designs under specific constraints                                   |
+| `reviewer`   | `review`         | Code review for quality, security, and maintainability                                  |
+| `worker`     | `implementation` | General-purpose agent with full file system capabilities                                |
 
 ### Prompts
 

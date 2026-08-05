@@ -32,6 +32,16 @@
 
 <!-- Link to related GitHub issue (e.g., "Fixes #123", "Closes #456") -->
 
+## Release PR Checklist
+
+<!-- For release PRs such as `chore(release): version x.y.z`. Remove this section if this is not a release PR. If this is a release PR, remove non-related sections from the template. -->
+
+- [ ] Version bump is correct
+- [ ] Changelog/release notes were reviewed
+- [ ] Generated package or lock files are included, if applicable
+- [ ] PR has the `ignore-for-release` label
+- [ ] No unrelated code changes are included
+
 ## Pre-flight Checklist
 
 - [ ] Changes match existing conventions in `extensions/`, `agents/`, `prompts/`, or `skills/` — skip if dependency-only
