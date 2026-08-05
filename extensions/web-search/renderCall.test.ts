@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import webSearchExtension from "./index.js";
 
 describe("web-search tool call rendering", () => {
