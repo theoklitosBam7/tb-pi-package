@@ -27,6 +27,7 @@
   "type": "module",
   "scripts": {
     "hooks:setup": "simple-git-hooks",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
@@ -48,7 +49,8 @@
     "oxlint": "^1.67.0",
     "simple-git-hooks": "^2.13.1",
     "typebox": "^1.1.39",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.10"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",
