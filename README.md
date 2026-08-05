@@ -114,23 +114,23 @@ tb-pi-package/
 
 - [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) — install separately before using this package
 - [Node.js](https://nodejs.org/) >= 22.22.3
-- [Bun](https://bun.sh/)
+- [pnpm](https://pnpm.io/) v11
 
 ### Setup
 
 ```bash
 git clone https://github.com/theoklitosBam7/tb-pi-package.git
 cd tb-pi-package
-bun install
-bun run hooks:setup
+pnpm install
+pnpm hooks:setup
 ```
 
 ### Checks
 
 ```bash
-bun fmt
-bun lint:fix
-bun typecheck
+pnpm fmt
+pnpm lint:fix
+pnpm typecheck
 ```
 
 ## Contributing
