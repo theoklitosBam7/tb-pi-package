@@ -60,16 +60,16 @@
     "typebox": "*"
   },
   "simple-git-hooks": {
-    "pre-commit": "bun run nano-staged"
+    "pre-commit": "pnpm exec nano-staged"
   },
   "nano-staged": {
     "*": "oxfmt --no-error-on-unmatched-pattern",
-    "*.{js,jsx,ts,tsx,mjs,cjs}": "bun run lint"
+    "*.{js,jsx,ts,tsx,mjs,cjs}": "pnpm lint"
   },
   "engines": {
     "node": ">=22.22.3"
   },
-  "packageManager": "bun@1.3.14",
+  "packageManager": "pnpm@11.20.0+sha512.9a6f330a95b66446ea088faf1521405a8a01f07fde7124cc9958dfed52d4bb436737e65b08f85f37b46fcba375092558ac51262b816844b22f63406ed166bfee",
   "pi": {
     "extensions": [
       "./extensions"
