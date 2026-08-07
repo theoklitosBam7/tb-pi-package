@@ -2,7 +2,6 @@
 name: reviewer
 description: Code review specialist for quality and security analysis
 tools: read, grep, find, ls, bash
-model: opencode-go/minimax-m2.7
 subagent_type: review
 ---
 

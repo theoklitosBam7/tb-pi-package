@@ -1,7 +1,6 @@
 ---
 name: worker
 description: General-purpose subagent with full capabilities, isolated context
-model: opencode-go/deepseek-v4-pro
 subagent_type: implementation
 ---
 

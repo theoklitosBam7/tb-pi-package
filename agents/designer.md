@@ -2,7 +2,6 @@
 name: designer
 description: Analyzes modules, APIs, or system boundaries to propose interface designs under specific constraints. Evaluates design trade-offs and produces structured proposals.
 tools: read, grep, find, ls
-model: openai-codex/gpt-5.5
 subagent_type: analysis
 ---
 
