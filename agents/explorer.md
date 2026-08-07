@@ -2,7 +2,6 @@
 name: explorer
 description: Fast codebase exploration that returns compressed context for handoff to other agents
 tools: read, grep, find, ls, bash
-model: opencode-go/deepseek-v4-flash
 subagent_type: exploration
 ---
 

@@ -2,7 +2,6 @@
 name: researcher
 description: Read-only agent for external docs and dependency research. Clones dependency repos to a temp directory, inspects library source, and cross-references local code against upstream without modifying your workspace.
 tools: read, grep, find, ls, bash, web_search, web_fetch
-model: opencode-go/mimo-v2.5
 subagent_type: research
 ---
 

@@ -228,7 +228,7 @@ interface SubagentDetails {
   results: SingleResult[];
 }
 
-function getFinalOutput(messages: Message[]): string {
+export function getFinalOutput(messages: Message[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role === "assistant") {
@@ -260,6 +260,30 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
     }
   }
   return items;
+}
+
+/**
+ * Build the model-facing content text for a parallel agent run.
+ *
+ * Each task's full final output is included verbatim so the delegating model can
+ * act on the findings. (Earlier behavior truncated each output to 100
+ * characters, which made parallel delegation unusable: the model saw "..." and
+ * re-did the work itself.)
+ */
+export interface ParallelSummaryItem {
+  agent: string;
+  exitCode: number;
+  /** Final assistant text output for the task (already extracted from messages). */
+  output: string;
+}
+
+export function formatParallelSummary(results: ParallelSummaryItem[]): string {
+  const successCount = results.filter((r) => r.exitCode === 0).length;
+  const blocks = results.map((r) => {
+    const status = r.exitCode === 0 ? "completed" : "failed";
+    return `[${r.agent}] ${status}:\n${r.output || "(no output)"}`;
+  });
+  return `Parallel: ${successCount}/${results.length} succeeded\n\n${blocks.join("\n\n")}`;
 }
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
@@ -962,19 +986,15 @@ export default function (pi: ExtensionAPI) {
           },
         );
 
-        const successCount = results.filter((r) => r.exitCode === 0).length;
-        const summaries = results.map((r) => {
-          const output = getFinalOutput(r.messages);
-          const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
-          return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
-        });
+        const text = formatParallelSummary(
+          results.map((r) => ({
+            agent: r.agent,
+            exitCode: r.exitCode,
+            output: getFinalOutput(r.messages),
+          })),
+        );
         return {
-          content: [
-            {
-              type: "text",
-              text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
-            },
-          ],
+          content: [{ type: "text", text }],
           details: makeDetails("parallel")(results),
         };
       }
