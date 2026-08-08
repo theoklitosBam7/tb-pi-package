@@ -1,4 +1,4 @@
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { keyHint, type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { htmlToMarkdown } from "./htmlToMarkdown.js";
@@ -22,6 +22,22 @@ export default function (pi: ExtensionAPI) {
     renderCall(args, theme) {
       return new Text(
         theme.fg("toolTitle", theme.bold("web_search ")) + theme.fg("toolOutput", args.query),
+        0,
+        0,
+      );
+    },
+    renderResult(result, { expanded }, theme, _context) {
+      if (expanded) {
+        return new Text(theme.fg("toolOutput", getTextContent(result)), 0, 0);
+      }
+
+      const details = result.details as { results?: SearchResult[] } | undefined;
+      const results = details?.results ?? [];
+      const summary = results.length === 0 ? "No results found." : `${results.length} results`;
+
+      return new Text(
+        theme.fg("toolOutput", summary) +
+          theme.fg("muted", ` (${keyHint("app.tools.expand", "to expand")})`),
         0,
         0,
       );
@@ -60,6 +76,42 @@ export default function (pi: ExtensionAPI) {
         0,
       );
     },
+    renderResult(result, { expanded }, theme, _context) {
+      if (expanded) {
+        return new Text(theme.fg("toolOutput", getTextContent(result)), 0, 0);
+      }
+
+      const details = result.details as
+        | {
+            url?: string;
+            offset?: number;
+            totalLength?: number;
+            chunkLength?: number;
+            truncated?: boolean;
+          }
+        | undefined;
+
+      let summary: string;
+      if (details?.url) {
+        const chunkLength = details.chunkLength ?? 0;
+        const totalLength = details.totalLength ?? 0;
+        const offset = details.offset ?? 0;
+        summary = `${details.url} [${chunkLength} of ${totalLength} chars, offset ${offset}]`;
+        if (details.truncated) {
+          summary += " truncated";
+        }
+      } else {
+        const firstLine = getTextContent(result).split("\n")[0] || "(no output)";
+        summary = firstLine;
+      }
+
+      return new Text(
+        theme.fg("toolOutput", summary) +
+          theme.fg("muted", ` (${keyHint("app.tools.expand", "to expand")})`),
+        0,
+        0,
+      );
+    },
     async execute(_id, params, signal, _onUpdate, _ctx) {
       return webFetch(params.url, params.max_length ?? 10000, params.offset ?? 0, signal);
     },
@@ -76,6 +128,11 @@ function textResult<TDetails = unknown>(
     content: [{ type: "text", text }],
     details,
   };
+}
+
+function getTextContent(result: AgentToolResult<unknown>): string {
+  const entry = result.content.find((item) => item.type === "text");
+  return entry && entry.type === "text" ? entry.text : "";
 }
 
 async function webSearch(
