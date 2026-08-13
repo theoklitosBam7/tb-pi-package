@@ -46,7 +46,7 @@
     "@types/turndown": "^5.0.6",
     "nano-staged": "^1.0.2",
     "oxfmt": "^0.52.0",
-    "oxlint": "^1.67.0",
+    "oxlint": "^1.78.0",
     "simple-git-hooks": "^2.13.1",
     "typebox": "^1.1.39",
     "typescript": "~5.9.3",
