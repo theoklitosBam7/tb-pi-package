@@ -27,6 +27,13 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
+import {
+  type AgentOverridesSnapshot,
+  type SubagentThinkingLevel,
+  getAgentOverride,
+  loadAgentOverrides,
+  resolveAgentOptions,
+} from "./overrides.js";
 
 /**
  * Find an agent by its subagent_type.
@@ -216,6 +223,8 @@ interface SingleResult {
   stderr: string;
   usage: UsageStats;
   model?: string;
+  thinking?: SubagentThinkingLevel;
+  systemPromptOverridden?: boolean;
   stopReason?: string;
   errorMessage?: string;
   step?: number;
@@ -315,13 +324,18 @@ async function writePromptToTempFile(
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
   const safeName = agentName.replace(/[^\w.-]+/g, "_");
   const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
-  await withFileMutationQueue(filePath, async () => {
-    await fs.promises.writeFile(filePath, prompt, {
-      encoding: "utf-8",
-      mode: 0o600,
+  try {
+    await withFileMutationQueue(filePath, async () => {
+      await fs.promises.writeFile(filePath, prompt, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
     });
-  });
-  return { dir: tmpDir, filePath };
+    return { dir: tmpDir, filePath };
+  } catch (error) {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -337,6 +351,22 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
   }
 
   return { command: "pi", args };
+}
+
+export function buildSubagentArgs(options: {
+  model?: string;
+  thinking?: SubagentThinkingLevel;
+  tools?: string[];
+  promptPath?: string;
+  task: string;
+}): string[] {
+  const args: string[] = ["--mode", "json", "-p", "--no-session"];
+  if (options.model) args.push("--model", options.model);
+  if (options.thinking) args.push("--thinking", options.thinking);
+  if (options.tools && options.tools.length > 0) args.push("--tools", options.tools.join(","));
+  if (options.promptPath) args.push("--append-system-prompt", options.promptPath);
+  args.push(`Task: ${options.task}`);
+  return args;
 }
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
@@ -365,6 +395,7 @@ async function runSingleAgent(
   signal: AbortSignal | undefined,
   onUpdate: OnUpdateCallback | undefined,
   makeDetails: (results: SingleResult[]) => SubagentDetails,
+  overrides: AgentOverridesSnapshot,
   modelOverride?: string, // Model from tool input, takes priority
   mainAgentModel?: string, // Fallback: main agent's current model
 ): Promise<SingleResult> {
@@ -393,26 +424,37 @@ async function runSingleAgent(
 
   const agent = resolution.agent!;
   const resolvedName = resolution.resolvedName!;
+  const overrideEntry = getAgentOverride(overrides, resolvedName);
+  if (overrideEntry?.kind === "invalid") {
+    return {
+      agent: resolvedName,
+      agentSource: agent.source,
+      task,
+      exitCode: 1,
+      messages: [],
+      stderr: overrideEntry.error,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 0,
+        turns: 0,
+      },
+      step,
+    };
+  }
 
-  // Build model fallback chain: modelOverride > agent.model (frontmatter) > mainAgentModel
-  // Remove duplicates while preserving order
-  const modelsToTry: (string | undefined)[] = [];
-  if (modelOverride !== undefined) modelsToTry.push(modelOverride);
-  if (agent.model !== undefined && agent.model !== modelOverride) modelsToTry.push(agent.model);
-  if (
-    mainAgentModel !== undefined &&
-    mainAgentModel !== modelOverride &&
-    mainAgentModel !== agent.model
-  )
-    modelsToTry.push(mainAgentModel);
-  if (modelsToTry.length === 0) modelsToTry.push(undefined); // No model specified
+  const resolvedOptions = resolveAgentOptions(
+    agent,
+    overrideEntry?.kind === "valid" ? overrideEntry.value : undefined,
+    { modelOverride, parentModel: mainAgentModel },
+  );
+  const { modelsToTry } = resolvedOptions;
 
   // Helper function to run with a specific model
   const runWithModel = async (model: string | undefined): Promise<SingleResult> => {
-    const args: string[] = ["--mode", "json", "-p", "--no-session"];
-    if (model) args.push("--model", model);
-    if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
-
     let tmpPromptDir: string | null = null;
     let tmpPromptPath: string | null = null;
 
@@ -433,6 +475,8 @@ async function runSingleAgent(
         turns: 0,
       },
       model: model,
+      thinking: resolvedOptions.thinking,
+      systemPromptOverridden: resolvedOptions.systemPromptOverridden,
       step,
     };
 
@@ -451,14 +495,19 @@ async function runSingleAgent(
     };
 
     try {
-      if (agent.systemPrompt.trim()) {
-        const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
+      if (resolvedOptions.systemPrompt.trim()) {
+        const tmp = await writePromptToTempFile(agent.name, resolvedOptions.systemPrompt);
         tmpPromptDir = tmp.dir;
         tmpPromptPath = tmp.filePath;
-        args.push("--append-system-prompt", tmpPromptPath);
       }
 
-      args.push(`Task: ${task}`);
+      const args = buildSubagentArgs({
+        model,
+        thinking: resolvedOptions.thinking,
+        tools: agent.tools,
+        promptPath: tmpPromptPath ?? undefined,
+        task,
+      });
       let wasAborted = false;
 
       const exitCode = await new Promise<number>((resolve) => {
@@ -681,7 +730,7 @@ export default function (pi: ExtensionAPI) {
     description: [
       "Delegate tasks to specialized agents with isolated context.",
       "Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-      "Model priority: input model > agent frontmatter > main agent model.",
+      "Model priority: input model > settings override > agent frontmatter > main agent model.",
       'Default agent scope is "user" (from ~/.pi/agent/agents).',
       'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
     ].join(" "),
@@ -708,6 +757,20 @@ export default function (pi: ExtensionAPI) {
           projectAgentsDir: discovery.projectAgentsDir,
           results,
         });
+      const requestedMode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+
+      let overrides: AgentOverridesSnapshot;
+      try {
+        overrides = loadAgentOverrides();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to load subagent overrides.";
+        return {
+          content: [{ type: "text", text: message }],
+          details: makeDetails(requestedMode)([]),
+          isError: true,
+        };
+      }
 
       if (modeCount !== 1) {
         const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
@@ -835,6 +898,7 @@ export default function (pi: ExtensionAPI) {
             signal,
             chainUpdate,
             makeDetails("chain"),
+            overrides,
             step.model ?? params.model, // step.model takes priority, then top-level params.model
             mainAgentModel,
           );
@@ -977,6 +1041,7 @@ export default function (pi: ExtensionAPI) {
                 }
               },
               makeDetails("parallel"),
+              overrides,
               t.model ?? params.model, // task.model takes priority, then top-level params.model
               mainAgentModel,
             );
@@ -990,7 +1055,7 @@ export default function (pi: ExtensionAPI) {
           results.map((r) => ({
             agent: r.agent,
             exitCode: r.exitCode,
-            output: getFinalOutput(r.messages),
+            output: getFinalOutput(r.messages) || r.errorMessage || r.stderr,
           })),
         );
         return {
@@ -1011,6 +1076,7 @@ export default function (pi: ExtensionAPI) {
           signal,
           onUpdate,
           makeDetails("single"),
+          overrides,
           params.model, // top-level model for single mode
           mainAgentModel,
         );

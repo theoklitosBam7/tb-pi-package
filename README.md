@@ -89,6 +89,44 @@ agent({ chain: [
 ]})
 ```
 
+### Subagent overrides
+
+Set persistent overrides by agent name in Pi's global `settings.json`. Pi normally stores this file at `~/.pi/agent/settings.json`. If you configure a different agent directory, the extension reads `settings.json` from that directory instead.
+
+```json
+{
+  "subagents": {
+    "agentOverrides": {
+      "researcher": {
+        "model": "openai-codex/gpt-5.6-luna",
+        "thinking": "medium",
+        "systemPrompt": "Use primary sources and report unknowns."
+      },
+      "reviewer": {
+        "model": "another-provider/model-1",
+        "thinking": "xhigh"
+      }
+    }
+  }
+}
+```
+
+Each override supports these fields:
+
+| Field          | Type   | Behavior                                                                                     |
+| -------------- | ------ | -------------------------------------------------------------------------------------------- |
+| `model`        | string | Adds a model choice after the tool input and before agent frontmatter in the fallback order. |
+| `thinking`     | string | Accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.                        |
+| `systemPrompt` | string | Replaces the agent's Markdown body. An empty string removes the agent-specific prompt.       |
+
+The model order is tool input, settings override, agent frontmatter, then the parent model. Model and API-key failures continue to the next choice. The configured thinking level applies to every attempt, and Pi clamps it to the selected model's capabilities.
+
+`systemPrompt` replaces only the agent-specific prompt. The child process still receives Pi's standard system prompt, context files, tool guidance, and skills.
+
+The extension reads one settings snapshot at the start of each `agent` or `list_agents` call. File changes apply on the next call without `/reload`. Overrides match the resolved agent's exact name, including agents selected through `subagent_type`. Unknown agent names are ignored.
+
+Invalid settings fail before the affected agent starts. `list_agents` marks invalid discovered-agent overrides but continues to list other agents. It reports whether a settings prompt override is active without printing the prompt text.
+
 ## Project Structure
 
 ```
@@ -99,7 +137,8 @@ tb-pi-package/
 │   ├── list-agents.ts   # /agents command + list_agents tool
 │   ├── subagent/        # Agent tool (single/parallel/chain modes)
 │   │   ├── agents.ts    # Agent discovery & parsing
-│   │   └── index.ts     # Subagent tool + TUI rendering
+│   │   ├── index.ts     # Subagent tool + TUI rendering
+│   │   └── overrides.ts # Global per-agent override loading and validation
 │   └── web-search/      # web_search & web_fetch tools
 │       └── index.ts
 ├── prompts/             # Workflow prompt templates
