@@ -1,6 +1,6 @@
 import type { Message } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { formatParallelSummary, getFinalOutput } from "./index.js";
+import { buildSubagentArgs, formatParallelSummary, getFinalOutput } from "./index.js";
 
 // Minimal message fixtures. getFinalOutput only reads role and content
 // part type/text, so these carry just what the behavior depends on.
@@ -14,6 +14,34 @@ const assistantToolCallOnly = (): Message =>
 const user = (text: string): Message => ({ role: "user", content: text }) as Message;
 const toolResult = (): Message =>
   ({ role: "toolResult", content: [{ type: "text", text: "result" }] }) as Message;
+
+describe("buildSubagentArgs", () => {
+  it("passes the selected model, thinking level, tools, and prompt file to Pi", () => {
+    expect(
+      buildSubagentArgs({
+        model: "openai/gpt-5",
+        thinking: "medium",
+        tools: ["read", "rg"],
+        promptPath: "/tmp/reviewer-prompt.md",
+        task: "Review the change",
+      }),
+    ).toEqual([
+      "--mode",
+      "json",
+      "-p",
+      "--no-session",
+      "--model",
+      "openai/gpt-5",
+      "--thinking",
+      "medium",
+      "--tools",
+      "read,rg",
+      "--append-system-prompt",
+      "/tmp/reviewer-prompt.md",
+      "Task: Review the change",
+    ]);
+  });
+});
 
 describe("getFinalOutput", () => {
   it("returns the text of the last assistant message, ignoring earlier ones and user messages", () => {

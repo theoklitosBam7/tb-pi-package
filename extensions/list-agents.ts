@@ -14,15 +14,28 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { discoverAgents, type AgentConfig } from "./subagent/agents.js";
+import {
+  type AgentOverrideEntry,
+  type EffectiveModelSource,
+  type SubagentThinkingLevel,
+  getAgentOverride,
+  loadAgentOverrides,
+  resolveAgentOptions,
+} from "./subagent/overrides.js";
 
 /**
  * Agent definition for display
  */
-interface AgentDefinition {
+export interface AgentDefinition {
   name: string;
   description?: string;
   tools?: string[];
   model?: string;
+  effectiveModel?: string;
+  effectiveModelSource: EffectiveModelSource;
+  thinking?: SubagentThinkingLevel;
+  systemPromptOverridden: boolean;
+  configError?: string;
   subagentType?: string;
   path: string;
   content: string;
@@ -32,12 +45,23 @@ interface AgentDefinition {
 /**
  * Convert AgentConfig from discoverAgents to AgentDefinition.
  */
-function agentConfigToDefinition(agent: AgentConfig): AgentDefinition {
+export function createAgentDefinition(
+  agent: AgentConfig,
+  overrideEntry: AgentOverrideEntry | undefined,
+  parentModel: string | undefined,
+): AgentDefinition {
+  const override = overrideEntry?.kind === "valid" ? overrideEntry.value : undefined;
+  const resolved = resolveAgentOptions(agent, override, { parentModel });
   return {
     name: agent.name,
     description: agent.description,
     tools: agent.tools,
     model: agent.model,
+    effectiveModel: resolved.effectiveModel,
+    effectiveModelSource: resolved.effectiveModelSource,
+    thinking: resolved.thinking,
+    systemPromptOverridden: resolved.systemPromptOverridden,
+    configError: overrideEntry?.kind === "invalid" ? overrideEntry.error : undefined,
     subagentType: agent.subagentType,
     path: agent.filePath,
     content: agent.systemPrompt,
@@ -48,9 +72,15 @@ function agentConfigToDefinition(agent: AgentConfig): AgentDefinition {
 /**
  * Discover agents from all sources: user and project.
  */
-async function loadAllAgents(cwd: string): Promise<AgentDefinition[]> {
+async function loadAllAgents(
+  cwd: string,
+  parentModel: string | undefined,
+): Promise<AgentDefinition[]> {
   const discovery = discoverAgents(cwd, "both");
-  return discovery.agents.map(agentConfigToDefinition);
+  const overrides = loadAgentOverrides();
+  return discovery.agents.map((agent) =>
+    createAgentDefinition(agent, getAgentOverride(overrides, agent.name), parentModel),
+  );
 }
 
 /**
@@ -73,8 +103,13 @@ function formatAgent(agent: AgentDefinition): string {
     lines.push(`\n**Tools:** ${agent.tools.join(", ")}`);
   }
 
-  if (agent.model) {
-    lines.push(`**Model:** ${agent.model}`);
+  lines.push(`**Model:** ${agent.effectiveModel ?? "Pi default"} (${agent.effectiveModelSource})`);
+  lines.push(`**Thinking:** ${agent.thinking ? `${agent.thinking} (settings)` : "Pi default"}`);
+  if (agent.systemPromptOverridden) {
+    lines.push("**System prompt:** overridden by settings");
+  }
+  if (agent.configError) {
+    lines.push(`**Configuration error:** ${agent.configError}`);
   }
 
   lines.push(`\n**Source:** ${agent.source}`);
@@ -97,7 +132,7 @@ function formatAgentItem(agent: AgentDefinition): string {
 /**
  * Build agent list response text
  */
-function buildAgentListResponse(agents: AgentDefinition[]): string {
+export function buildAgentListResponse(agents: AgentDefinition[]): string {
   if (agents.length === 0) {
     return "No agents found.";
   }
@@ -136,8 +171,15 @@ function formatAgentEntry(lines: string[], agent: AgentDefinition): void {
   if (agent.tools && agent.tools.length > 0) {
     lines.push(`- **Tools:** ${agent.tools.join(", ")}`);
   }
-  if (agent.model) {
-    lines.push(`- **Model:** ${agent.model}`);
+  lines.push(
+    `- **Model:** ${agent.effectiveModel ?? "Pi default"} (${agent.effectiveModelSource})`,
+  );
+  lines.push(`- **Thinking:** ${agent.thinking ? `${agent.thinking} (settings)` : "Pi default"}`);
+  if (agent.systemPromptOverridden) {
+    lines.push("- **System prompt:** overridden by settings");
+  }
+  if (agent.configError) {
+    lines.push(`- **Configuration error:** ${agent.configError}`);
   }
   lines.push("");
 }
@@ -158,7 +200,8 @@ export default function listAgentsExtension(pi: ExtensionAPI) {
     parameters: Type.Object({}),
 
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const agents = await loadAllAgents(ctx.cwd);
+      const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const agents = await loadAllAgents(ctx.cwd, parentModel);
 
       if (agents.length === 0) {
         return {
@@ -184,6 +227,11 @@ export default function listAgentsExtension(pi: ExtensionAPI) {
             subagentType: a.subagentType,
             tools: a.tools,
             model: a.model,
+            effectiveModel: a.effectiveModel,
+            effectiveModelSource: a.effectiveModelSource,
+            thinking: a.thinking,
+            systemPromptOverridden: a.systemPromptOverridden,
+            configError: a.configError,
             path: a.path,
             source: a.source,
           })),
@@ -196,7 +244,16 @@ export default function listAgentsExtension(pi: ExtensionAPI) {
   pi.registerCommand("agents", {
     description: "List ALL available agents",
     handler: async (_args, ctx) => {
-      const agents = await loadAllAgents(ctx.cwd);
+      const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      let agents: AgentDefinition[];
+      try {
+        agents = await loadAllAgents(ctx.cwd, parentModel);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to load subagent overrides.";
+        ctx.ui.notify(message, "error");
+        return;
+      }
 
       if (agents.length === 0) {
         ctx.ui.notify("No agents found.", "info");
