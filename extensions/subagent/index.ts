@@ -246,6 +246,12 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
   return items;
 }
 
+function getResultDisplayItems(
+  result: Pick<SingleResult, "messages" | "displayItems">,
+): DisplayItem[] {
+  return result.messages.length > 0 ? getDisplayItems(result.messages) : (result.displayItems ?? []);
+}
+
 async function mapWithConcurrencyLimit<TIn, TOut>(
   items: TIn[],
   concurrency: number,
@@ -1194,7 +1200,7 @@ export default function (pi: ExtensionAPI) {
         const status = getResultStatus(r);
         const isError = status === "failed";
         const icon = statusIcon(status);
-        const displayItems = getDisplayItems(r.messages);
+        const displayItems = getResultDisplayItems(r);
         const finalOutput = expanded ? getResultOutput(r) : "";
 
         if (expanded) {
@@ -1296,7 +1302,7 @@ export default function (pi: ExtensionAPI) {
           for (const r of details.results) {
             const status = getResultStatus(r);
             const rIcon = statusIcon(status);
-            const displayItems = getDisplayItems(r.messages);
+            const displayItems = getResultDisplayItems(r);
             const finalOutput = getResultOutput(r);
 
             container.addChild(new Spacer(1));
@@ -1352,7 +1358,7 @@ export default function (pi: ExtensionAPI) {
         for (const r of details.results) {
           const status = getResultStatus(r);
           const rIcon = statusIcon(status);
-          const displayItems = getDisplayItems(r.messages);
+          const displayItems = getResultDisplayItems(r);
           text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
           if (r.outputPath) text += `\n${theme.fg("muted", `Output: ${r.outputPath}`)}`;
           else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
@@ -1392,7 +1398,7 @@ export default function (pi: ExtensionAPI) {
           for (const r of details.results) {
             const status = getResultStatus(r);
             const rIcon = statusIcon(status);
-            const displayItems = getDisplayItems(r.messages);
+            const displayItems = getResultDisplayItems(r);
             const finalOutput = getResultOutput(r);
 
             container.addChild(new Spacer(1));
@@ -1440,7 +1446,7 @@ export default function (pi: ExtensionAPI) {
         for (const r of details.results) {
           const status = getResultStatus(r);
           const rIcon = statusIcon(status);
-          const displayItems = getDisplayItems(r.messages);
+          const displayItems = getResultDisplayItems(r);
           text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
           if (r.outputPath) text += `\n${theme.fg("muted", `Output: ${r.outputPath}`)}`;
           else if (displayItems.length === 0)

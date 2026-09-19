@@ -219,6 +219,8 @@ describe("writeResultArtifact", () => {
       expect(artifact).toContain("- Task: parallel item 2");
       expect(artifact).toContain("## Result\n\n# Finding\n\nComplete output.");
       expect(artifact).not.toContain("## Failure diagnostics");
+      expect(result.messages).toEqual([]);
+      expect(result.displayItems).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -339,6 +341,85 @@ describe("writeResultArtifact", () => {
       expect(result.messages).toEqual([assistant("done")]);
       expect(fs.readdirSync(dir)).toEqual(["result.md"]);
       expect(fs.readdirSync(outputPath)).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("artifact-backed rendering", () => {
+  it("retains lightweight tool calls after messages are cleared", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-render-test-"));
+    const outputPath = path.join(dir, "result.md");
+    const result = {
+      agent: "reviewer",
+      agentSource: "user" as const,
+      task: "Review",
+      exitCode: 0,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", id: "1", name: "read", arguments: { path: "/tmp/input.ts" } },
+            { type: "text", text: "done" },
+          ],
+        } as Message,
+      ],
+      stderr: "",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 0,
+        turns: 0,
+      },
+    };
+
+    try {
+      await writeResultArtifact({
+        result,
+        outputPath,
+        taskLabel: "single task",
+        startedAt: "2026-01-02T03:04:05.000Z",
+      });
+
+      expect(result.messages).toEqual([]);
+      expect(result.displayItems).toEqual([
+        { type: "toolCall", name: "read", args: { path: "/tmp/input.ts" } },
+      ]);
+
+      const tools: Record<string, any> = {};
+      subagentExtension({
+        registerTool(tool: any) {
+          tools[tool.name] = tool;
+        },
+      } as any);
+      const theme = {
+        bold: (text: string) => text,
+        fg: (_color: string, text: string) => text,
+      };
+      const rendered = tools.agent
+        .renderResult(
+          {
+            content: [{ type: "text", text: "Agent completed." }],
+            details: {
+              mode: "single",
+              agentScope: "user",
+              projectAgentsDir: null,
+              results: [result],
+            },
+          },
+          { expanded: true, isPartial: false },
+          theme,
+          {},
+        )
+        .render(100)
+        .join("\n");
+
+      expect(rendered).toContain("read /tmp/input.ts");
+      expect(rendered).toContain("done");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -45,6 +45,12 @@ export interface UsageStats {
   turns: number;
 }
 
+export interface ResultDisplayItem {
+  type: "toolCall";
+  name: string;
+  args: Record<string, unknown>;
+}
+
 export interface SingleResult {
   agent: string;
   agentSource: "user" | "project" | "unknown";
@@ -60,6 +66,7 @@ export interface SingleResult {
   errorMessage?: string;
   step?: number;
   outputPath?: string;
+  displayItems?: ResultDisplayItem[];
 }
 
 function sanitizeArtifactName(value: string): string {
@@ -118,6 +125,23 @@ function formatArtifactMarkdown(options: {
     }
   }
   return lines.join("\n");
+}
+
+function getToolCallDisplayItems(messages: Message[]): ResultDisplayItem[] {
+  const items: ResultDisplayItem[] = [];
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.content) {
+      if (part.type === "toolCall") {
+        items.push({
+          type: "toolCall",
+          name: part.name,
+          args: part.arguments,
+        });
+      }
+    }
+  }
+  return items;
 }
 
 export function getFinalOutput(messages: Message[]): string {
@@ -213,6 +237,7 @@ export async function writeResultArtifact(options: {
   const { result, outputPath } = options;
   const status = getResultStatus(result);
   const finalOutput = getFinalOutput(result.messages);
+  const displayItems = getToolCallDisplayItems(result.messages);
   const diagnostics = status === "failed" ? getFailureDiagnostics(result) : {};
   const markdown = formatArtifactMarkdown({
     agent: result.agent,
@@ -242,6 +267,7 @@ export async function writeResultArtifact(options: {
     }
   });
   result.outputPath = outputPath;
+  result.displayItems = displayItems;
   result.messages = [];
   const diagnosticText = [diagnostics.errorMessage, diagnostics.stderr]
     .filter(Boolean)
