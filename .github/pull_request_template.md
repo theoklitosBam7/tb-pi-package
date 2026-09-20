@@ -24,7 +24,11 @@
 
 <!-- How was this tested? What should reviewers look for? For deps-only PRs: run checks below and note any engine or runtime minimum changes. -->
 
-- [ ] `pnpm fmt`, `pnpm lint:fix`, and `pnpm typecheck` pass
+- [ ] `pnpm fmt:check` passes
+- [ ] `pnpm lint:check` passes
+- [ ] `pnpm typecheck` passes
+- [ ] `pnpm typecheck:tests` passes
+- [ ] `pnpm test` passes
 - [ ] Tested in pi (install method: global / local / session) — skip if dependency-only
 - [ ] Manual testing notes:
 
@@ -45,6 +49,6 @@
 ## Pre-flight Checklist
 
 - [ ] Changes match existing conventions in `extensions/`, `agents/`, `prompts/`, or `skills/` — skip if dependency-only
-- [ ] Lint and type-check pass: `pnpm lint:fix && pnpm typecheck`
+- [ ] All quality checks pass: `pnpm fmt:check`, `pnpm lint:check`, `pnpm typecheck`, `pnpm typecheck:tests`, and `pnpm test`
 - [ ] No unintended changes to other files
 - [ ] README or release notes updated if user-facing behavior changed
