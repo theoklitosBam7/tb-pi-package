@@ -393,9 +393,12 @@ describe("artifact-backed rendering", () => {
 
       const tools: Record<string, any> = {};
       subagentExtension({
+        on() {},
         registerTool(tool: any) {
           tools[tool.name] = tool;
         },
+        registerCommand() {},
+        registerShortcut() {},
       } as any);
       const theme = {
         bold: (text: string) => text,
@@ -454,9 +457,12 @@ describe("subagent rendering", () => {
   it("uses status classification for concurrent results and keeps partial renders status-only", () => {
     const tools: Record<string, any> = {};
     subagentExtension({
+      on() {},
       registerTool(tool: any) {
         tools[tool.name] = tool;
       },
+      registerCommand() {},
+      registerShortcut() {},
     } as any);
     const theme = {
       bold: (text: string) => text,

@@ -36,12 +36,12 @@ Once installed, the package's extensions, agents, and prompts are available auto
 
 ### Extensions
 
-| Extension     | Tool(s)                   | Command     | Description                                                           |
-| ------------- | ------------------------- | ----------- | --------------------------------------------------------------------- |
-| `subagent`    | `agent`                   | —           | Spawn isolated agent processes for single, parallel, or chained tasks |
-| `web-search`  | `web_search`, `web_fetch` | —           | Search the web and fetch page content                                 |
-| `list-agents` | `list_agents`             | `/agents`   | Discover and browse agent definitions                                 |
-| `commands`    | —                         | `/commands` | List all registered slash commands                                    |
+| Extension     | Tool(s)                   | Command            | Description                                                              |
+| ------------- | ------------------------- | ------------------ | ------------------------------------------------------------------------ |
+| `subagent`    | `agent`                   | `/agent-inspector` | Spawn and inspect isolated agents for single, parallel, or chained tasks |
+| `web-search`  | `web_search`, `web_fetch` | —                  | Search the web and fetch page content                                    |
+| `list-agents` | `list_agents`             | `/agents`          | Discover and browse agent definitions                                    |
+| `commands`    | —                         | `/commands`        | List all registered slash commands                                       |
 
 ### Agents
 
@@ -85,6 +85,14 @@ agent({ chain: [
   { agent: "implementer", task: "Implement TTL support using this context: {previous}" }
 ]})
 ```
+
+### Inspect running agents
+
+In pi's terminal UI, use `/agent-inspector` or press `Ctrl+Shift+A`. Select a run with the arrow keys and press Enter to see its task, model, status, live response, and tool activity. Each invocation has a separate run ID, including repeated calls to the same agent.
+
+Use Up/Down or Page Up/Page Down to scroll. Home shows the start; End follows new output. Escape returns to the run list, then closes the inspector. Closing the view does not stop the agent. The inspector is read-only.
+
+The list keeps active runs and up to 50 completed runs in memory. Long output is truncated with a notice. Reloading or leaving the session clears this history; result files are unchanged. `/agents` still browses agent definitions.
 
 ### Agent instructions
 
