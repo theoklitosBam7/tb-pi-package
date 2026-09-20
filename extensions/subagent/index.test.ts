@@ -15,6 +15,7 @@ import {
   getResultStatus,
   installAbortHandler,
   isCompletedResult,
+  type SingleResult,
   writeResultArtifact,
 } from "./result.js";
 
@@ -186,9 +187,9 @@ describe("writeResultArtifact", () => {
   it("persists completed metadata and full output without failure sections", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-artifact-test-"));
     const outputPath = path.join(dir, "completed.md");
-    const result = {
+    const result: SingleResult = {
       agent: "reviewer",
-      agentSource: "user" as const,
+      agentSource: "user",
       task: "Review",
       exitCode: 0,
       messages: [assistant("# Finding\n\nComplete output.")],
@@ -351,9 +352,9 @@ describe("artifact-backed rendering", () => {
   it("retains lightweight tool calls after messages are cleared", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-render-test-"));
     const outputPath = path.join(dir, "result.md");
-    const result = {
+    const result: SingleResult = {
       agent: "reviewer",
-      agentSource: "user" as const,
+      agentSource: "user",
       task: "Review",
       exitCode: 0,
       messages: [

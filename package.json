@@ -29,10 +29,11 @@
     "hooks:setup": "simple-git-hooks",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
     "fmt": "oxfmt",
     "fmt:check": "oxfmt --check",
-    "lint": "oxlint",
-    "lint:fix": "oxlint --fix"
+    "lint": "oxlint --fix",
+    "lint:check": "oxlint"
   },
   "dependencies": {
     "turndown": "^7.2.4"

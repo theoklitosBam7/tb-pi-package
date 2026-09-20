@@ -167,9 +167,11 @@ pnpm hooks:setup
 ### Checks
 
 ```bash
-pnpm fmt
-pnpm lint:fix
+pnpm fmt:check
+pnpm lint:check
 pnpm typecheck
+pnpm typecheck:tests
+pnpm test
 ```
 
 ## Contributing

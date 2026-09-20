@@ -249,7 +249,9 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 function getResultDisplayItems(
   result: Pick<SingleResult, "messages" | "displayItems">,
 ): DisplayItem[] {
-  return result.messages.length > 0 ? getDisplayItems(result.messages) : (result.displayItems ?? []);
+  return result.messages.length > 0
+    ? getDisplayItems(result.messages)
+    : (result.displayItems ?? []);
 }
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
