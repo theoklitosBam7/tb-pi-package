@@ -6,7 +6,7 @@ A collection of extensions and agent definitions for [pi](https://github.com/ear
 
 ## About
 
-This package extends pi with custom tools, slash commands, specialized subagents, and prompt templates for common development workflows like code review, implementation planning, and multi-agent orchestration.
+This package extends pi with custom tools, slash commands, specialized subagents, and prompt templates for code review, implementation, research, and multi-agent orchestration.
 
 ## Features
 
@@ -14,8 +14,8 @@ This package extends pi with custom tools, slash commands, specialized subagents
 - **Web search & fetch** — Search DuckDuckGo and fetch page content directly from pi.
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
 - **Commands browser** — List all registered slash commands via `/commands`.
-- **7 built-in agents** — Explorer, planner, architect, designer, reviewer, worker, and researcher — each tuned for a specific task.
-- **Workflow prompts** — Pre-built prompt templates for explorer→plan→implement, implement→review, standalone review, and wiki generation.
+- **4 built-in agents:** Scout, researcher, implementer, and reviewer, each tuned for a specific task.
+- **Workflow prompts:** Reusable templates for scouting, research, implementation, review, implementation review, and wiki generation.
 
 ## Installation
 
@@ -47,47 +47,48 @@ Once installed, the package's extensions, agents, and prompts are available auto
 
 Agents are defined as Markdown files with frontmatter in `agents/`. Each agent has a specialized role, tool set, and model:
 
-| Agent        | Type             | Role                                                                                    |
-| ------------ | ---------------- | --------------------------------------------------------------------------------------- |
-| `explorer`   | `exploration`    | Fast codebase exploration, returns compressed context for handoff                       |
-| `planner`    | `planning`       | Creates implementation plans from context and requirements                              |
-| `researcher` | `research`       | Reads external docs and dependency source code; clones repos to temp dir for inspection |
-| `architect`  | `analysis`       | Analyzes structure, coupling, and architectural boundaries                              |
-| `designer`   | `analysis`       | Proposes interface designs under specific constraints                                   |
-| `reviewer`   | `review`         | Code review for quality, security, and maintainability                                  |
-| `worker`     | `implementation` | General-purpose agent with full file system capabilities                                |
+| Agent         | Type             | Role                                                                        |
+| ------------- | ---------------- | --------------------------------------------------------------------------- |
+| `scout`       | `exploration`    | Maps files, execution paths, tests, constraints, and unknowns               |
+| `researcher`  | `research`       | Answers external technical questions with traceable primary-source evidence |
+| `implementer` | `implementation` | Implements a bounded task and reports tests and validation                  |
+| `reviewer`    | `review`         | Independently reviews diffs, plans, solutions, and bounded code areas       |
 
 ### Prompts
 
-Workflow prompts in `prompts/` provide ready-made multi-agent patterns:
+Prompt templates in `prompts/` provide ready-made single-agent and chained workflows:
 
-| Prompt                 | Workflow                                                                       |
-| ---------------------- | ------------------------------------------------------------------------------ |
-| `explorer-and-plan`    | Explorer gathers context → Planner creates plan                                |
-| `implement`            | Explorer → Planner → Worker implements                                         |
-| `implement-and-review` | Worker implements → Reviewer reviews → Worker applies feedback                 |
-| `review`               | Standalone code review via the reviewer agent                                  |
-| `generate-wiki`        | Explorer investigates repo → Worker generates and writes wiki pages to `wiki/` |
+| Prompt                 | Workflow                                                          |
+| ---------------------- | ----------------------------------------------------------------- |
+| `scout`                | Map a repository area with the scout agent                        |
+| `research`             | Research an external technical question with the researcher agent |
+| `implement`            | Scout the codebase, then implement with the implementer agent     |
+| `implement-and-review` | Implement, review, then apply confirmed fixes                     |
+| `review`               | Standalone review through the reviewer agent                      |
+| `generate-wiki`        | Scout a repository, then create or update wiki pages              |
 
 ### Subagent Tool Examples
 
 ```
 # Single task
-agent({ agent: "explorer", task: "Explore the auth module and summarize its structure" })
+agent({ agent: "scout", task: "Map the auth module and summarize its structure" })
 
 # Parallel tasks
 agent({ tasks: [
-  { agent: "explorer", task: "Explore the API layer" },
-  { agent: "explorer", task: "Explore the database layer" }
+  { agent: "scout", task: "Map the API layer" },
+  { agent: "scout", task: "Map the database layer" }
 ]})
 
 # Chained workflow (output of step N feeds into step N+1 via {previous})
 agent({ chain: [
-  { agent: "explorer", task: "Investigate the caching module" },
-  { agent: "planner", task: "Create an implementation plan for adding TTL support based on: {previous}" },
-  { agent: "worker", task: "Implement the plan from: {previous}" }
+  { agent: "scout", task: "Investigate the caching module" },
+  { agent: "implementer", task: "Implement TTL support using this context: {previous}" }
 ]})
 ```
+
+### Agent instructions
+
+`.pi/AGENTS_example.md` is a starting point for `~/.pi/agent/AGENTS.md`. Copy it and adapt it to your workflow. The example is not loaded automatically because its filename is intentionally different.
 
 ### Subagent overrides
 
