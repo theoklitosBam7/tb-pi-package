@@ -21,12 +21,20 @@ import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
+  type ExtensionContext,
   getMarkdownTheme,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
+import {
+  AgentInspectorComponent,
+  AgentInspectorStore,
+  getInspectorMessageText,
+  getInspectorText,
+  type AgentInspectorRunHandle,
+} from "./inspector.js";
 import {
   type AgentOverridesSnapshot,
   type SubagentThinkingLevel,
@@ -357,6 +365,7 @@ async function runSingleAgent(
   overrides: AgentOverridesSnapshot,
   modelOverride?: string, // Model from tool input, takes priority
   mainAgentModel?: string, // Fallback: main agent's current model
+  inspector?: AgentInspectorStore,
 ): Promise<SingleResult> {
   const resolution = resolveAgent(agents, agentName, subagentType);
 
@@ -411,6 +420,7 @@ async function runSingleAgent(
     { modelOverride, parentModel: mainAgentModel },
   );
   const { modelsToTry } = resolvedOptions;
+  let inspectorRun: AgentInspectorRunHandle | undefined;
 
   // Helper function to run with a specific model
   const runWithModel = async (model: string | undefined): Promise<SingleResult> => {
@@ -462,6 +472,11 @@ async function runSingleAgent(
         promptPath: tmpPromptPath ?? undefined,
         task,
       });
+      if (inspector && !inspectorRun) {
+        inspectorRun = inspector.start({ agent: resolvedName, task, model });
+      } else {
+        inspectorRun?.setModel(model);
+      }
       let wasAborted = false;
 
       const exitCode = await new Promise<number>((resolve) => {
@@ -484,11 +499,39 @@ async function runSingleAgent(
             return;
           }
 
+          if (event.type === "message_start" && event.message?.role === "assistant") {
+            inspectorRun?.messageStart(getInspectorMessageText(event.message));
+          }
+
+          if (event.type === "message_update" && event.assistantMessageEvent) {
+            const assistantEvent = event.assistantMessageEvent;
+            if (assistantEvent.type === "text_delta" && typeof assistantEvent.delta === "string") {
+              inspectorRun?.appendText(assistantEvent.delta);
+            }
+          }
+
+          if (event.type === "tool_execution_start" && event.toolCallId && event.toolName) {
+            inspectorRun?.toolStart(event.toolCallId, event.toolName, event.args ?? {});
+          }
+
+          if (event.type === "tool_execution_update" && event.toolCallId) {
+            inspectorRun?.toolUpdate(event.toolCallId, getInspectorText(event.partialResult));
+          }
+
+          if (event.type === "tool_execution_end" && event.toolCallId) {
+            inspectorRun?.toolEnd(
+              event.toolCallId,
+              getInspectorText(event.result),
+              Boolean(event.isError),
+            );
+          }
+
           if (event.type === "message_end" && event.message) {
             const msg = event.message as Message;
             currentResult.messages.push(msg);
 
             if (msg.role === "assistant") {
+              inspectorRun?.messageEnd(getInspectorMessageText(msg));
               currentResult.usage.turns++;
               const usage = msg.usage;
               if (usage) {
@@ -499,7 +542,10 @@ async function runSingleAgent(
                 currentResult.usage.cost += usage.cost?.total || 0;
                 currentResult.usage.contextTokens = usage.totalTokens || 0;
               }
-              if (!currentResult.model && msg.model) currentResult.model = msg.model;
+              if (!currentResult.model && msg.model) {
+                currentResult.model = msg.model;
+                inspectorRun?.setModel(msg.model);
+              }
               if (msg.stopReason) currentResult.stopReason = msg.stopReason;
               if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
             }
@@ -523,14 +569,15 @@ async function runSingleAgent(
           currentResult.stderr += data.toString();
         });
 
-        proc.on("close", (code) => {
+        proc.on("close", (code, signalName) => {
           closed = true;
           cleanupAbort();
           if (buffer.trim()) processLine(buffer);
-          resolve(code ?? 0);
+          resolve(signalName ? 1 : (code ?? 1));
         });
 
         proc.on("error", () => {
+          closed = true;
           cleanupAbort();
           resolve(1);
         });
@@ -572,30 +619,42 @@ async function runSingleAgent(
 
   // Try models in order, falling back on model/API key errors
   let lastResult: SingleResult | undefined;
-  for (let i = 0; i < modelsToTry.length; i++) {
-    const model = modelsToTry[i];
-    const result = await runWithModel(model);
-    lastResult = result;
+  try {
+    for (let i = 0; i < modelsToTry.length; i++) {
+      const model = modelsToTry[i];
+      const result = await runWithModel(model);
+      lastResult = result;
 
-    // Success - return immediately
-    if (isCompletedResult(result)) {
-      return result;
+      // Success - return immediately
+      if (isCompletedResult(result)) {
+        return result;
+      }
+
+      // Check if this is a model/API key error that warrants a fallback
+      const shouldFallback = isModelOrApiKeyError(result.stderr) && i < modelsToTry.length - 1;
+      if (!shouldFallback) {
+        // No more fallbacks or error is not model-related
+        return result;
+      }
+
+      // Log fallback for debugging
+      const nextModel = modelsToTry[i + 1];
+      result.stderr += `\n[Fallback] Model "${model ?? "default"}" failed, trying "${nextModel ?? "default"}"...`;
     }
 
-    // Check if this is a model/API key error that warrants a fallback
-    const shouldFallback = isModelOrApiKeyError(result.stderr) && i < modelsToTry.length - 1;
-    if (!shouldFallback) {
-      // No more fallbacks or error is not model-related
-      return result;
+    // Should not reach here, but return last result just in case
+    return lastResult!;
+  } finally {
+    if (inspectorRun?.status() === "running") {
+      const status =
+        lastResult?.stopReason === "aborted"
+          ? "aborted"
+          : lastResult && isCompletedResult(lastResult)
+            ? "completed"
+            : "failed";
+      inspectorRun.finish(status);
     }
-
-    // Log fallback for debugging
-    const nextModel = modelsToTry[i + 1];
-    result.stderr += `\n[Fallback] Model "${model ?? "default"}" failed, trying "${nextModel ?? "default"}"...`;
   }
-
-  // Should not reach here, but return last result just in case
-  return lastResult!;
 }
 
 const TaskItem = Type.Object({
@@ -686,6 +745,64 @@ const SubagentParams = Type.Object({
 });
 
 export default function (pi: ExtensionAPI) {
+  const inspector = new AgentInspectorStore();
+  let activeInspectorClose: (() => void) | undefined;
+  const openInspector = async (ctx: ExtensionContext): Promise<void> => {
+    if (ctx.mode !== "tui") {
+      ctx.ui.notify("The subagent inspector requires interactive TUI mode.", "error");
+      return;
+    }
+    if (activeInspectorClose) return;
+
+    let component: AgentInspectorComponent | undefined;
+    let finishCustom: (() => void) | undefined;
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      component?.dispose();
+      finishCustom?.();
+      activeInspectorClose = undefined;
+    };
+    activeInspectorClose = close;
+
+    try {
+      await ctx.ui.custom<void>(
+        (tui, theme, keybindings, done) => {
+          finishCustom = done;
+          component = new AgentInspectorComponent(tui, theme, keybindings, inspector, close);
+          return component;
+        },
+        {
+          overlay: true,
+          overlayOptions: {
+            width: "80%",
+            minWidth: 40,
+            maxHeight: "80%",
+            anchor: "center",
+          },
+        },
+      );
+    } finally {
+      close();
+    }
+  };
+
+  pi.on("session_shutdown", () => {
+    activeInspectorClose?.();
+    inspector.clear();
+  });
+
+  pi.registerCommand("agent-inspector", {
+    description: "Inspect running and recently completed subagents",
+    handler: async (_args, ctx) => openInspector(ctx),
+  });
+
+  pi.registerShortcut("ctrl+shift+a", {
+    description: "Inspect running and recently completed subagents",
+    handler: async (ctx) => openInspector(ctx),
+  });
+
   pi.registerTool({
     name: "agent",
     label: "Agent",
@@ -886,6 +1003,7 @@ export default function (pi: ExtensionAPI) {
             overrides,
             step.model ?? params.model, // step.model takes priority, then top-level params.model
             mainAgentModel,
+            inspector,
           );
           const previousResultOutput = getFinalOutput(result.messages);
           await persistResultArtifact({
@@ -1026,6 +1144,7 @@ export default function (pi: ExtensionAPI) {
               overrides,
               t.model ?? params.model, // task.model takes priority, then top-level params.model
               mainAgentModel,
+              inspector,
             );
             await persistResultArtifact({
               result,
@@ -1070,6 +1189,7 @@ export default function (pi: ExtensionAPI) {
           overrides,
           params.model, // top-level model for single mode
           mainAgentModel,
+          inspector,
         );
         await persistResultArtifact({
           result,
