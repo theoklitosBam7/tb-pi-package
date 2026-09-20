@@ -1,20 +1,8 @@
 ---
-description: Reviewer analyzes current changes for correctness, scope, simplicity, maintainability, safety, and tests
+description: Independently review a diff, plan, or bounded code area
+argument-hint: "[target or requirements]"
 ---
 
-Use the subagent tool to run the "reviewer" agent on: $@
+Use the subagent tool to run the `reviewer` agent on: $@
 
-Ask the reviewer to:
-
-- focus on correctness, scope, simplicity, maintainability, safety, and test coverage
-- prioritize findings by severity
-- be concrete and tightly scoped to the actual changes
-- call out assumptions or unclear intent instead of guessing
-- suggest the smallest reasonable fix for each issue
-
-Return:
-
-- Summary
-- Findings sorted by severity
-- Open questions
-- Approval status
+If no target is supplied, review the current changes. Ask the reviewer to identify the target, baseline, and requirements, inspect the affected code and tests, and report only evidence-backed findings with priorities and the smallest fixes. Return the reviewer's report.

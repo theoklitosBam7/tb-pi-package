@@ -193,8 +193,8 @@ export default function listAgentsExtension(pi: ExtensionAPI) {
     name: "list_agents",
     label: "List Agents",
     description:
-      "List ALL available agents from user (~/.pi/agent/agents/), project (.pi/agents), " +
-      "These are agent definitions with specialized capabilities (planner, reviewer, explorer, worker, etc.). " +
+      "List available agents from user (~/.pi/agent/agents/) and project (.pi/agents). " +
+      "Each agent definition provides specialized capabilities. " +
       "Use this tool when you need to delegate work to a specialized agent.",
     promptSnippet: "List all available pi coding agent agents",
     parameters: Type.Object({}),

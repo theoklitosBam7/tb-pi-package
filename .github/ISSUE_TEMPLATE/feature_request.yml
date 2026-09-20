@@ -66,7 +66,7 @@ body:
       description: Example agent frontmatter, prompt flow, or tool invocation if applicable
       placeholder: |
         # Example agent task or prompt snippet
-        agent({ agent: "explorer", task: "..." })
+        agent({ agent: "scout", task: "..." })
 
   - type: dropdown
     id: priority
