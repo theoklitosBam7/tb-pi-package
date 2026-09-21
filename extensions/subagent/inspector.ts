@@ -68,6 +68,7 @@ export interface AgentInspectorRunHandle {
   toolStart(id: string, name: string, args: Record<string, unknown>): void;
   toolUpdate(id: string, output: string): void;
   toolEnd(id: string, output: string, isError: boolean): void;
+  setStopper(stopper: () => void): void;
   finish(status: Exclude<AgentInspectorStatus, "running">): void;
   status(): AgentInspectorStatus;
 }
@@ -82,6 +83,7 @@ function boundedArgs(args: Record<string, unknown>): string {
 
 export class AgentInspectorStore {
   private readonly runs = new Map<string, AgentInspectorRun>();
+  private readonly stoppers = new Map<string, () => void>();
   private readonly listeners = new Set<() => void>();
   private sequence = 0;
 
@@ -94,7 +96,15 @@ export class AgentInspectorStore {
 
   clear(): void {
     this.runs.clear();
+    this.stoppers.clear();
     this.notify();
+  }
+
+  stop(id: string): boolean {
+    const stopper = this.stoppers.get(id);
+    if (!stopper) return false;
+    stopper();
+    return true;
   }
 
   snapshot(): readonly AgentInspectorRun[] {
@@ -215,8 +225,13 @@ export class AgentInspectorStore {
       },
       toolUpdate: (id, output) => updateTool(id, output),
       toolEnd: (id, output, isError) => updateTool(id, output, isError ? "failed" : "completed"),
+      setStopper: (stopper) => {
+        if (!isActive()) return;
+        this.stoppers.set(run.id, stopper);
+      },
       finish: (status) => {
         if (!isActive()) return;
+        this.stoppers.delete(run.id);
         run.status = status;
         for (const tool of run.tools) {
           if (tool.status === "running") tool.status = status === "aborted" ? "aborted" : "failed";
@@ -283,6 +298,11 @@ export class AgentInspectorComponent {
     }
     if (this.detail) {
       const run = this.selectedRun(runs);
+      if (data === "x" && run?.status === "running") {
+        this.store.stop(run.id);
+        this.tui.requestRender();
+        return;
+      }
       const lines = run ? this.detailLines(run, this.contentWidth()) : [];
       const page = Math.max(1, this.bodyHeight());
       const maxOffset = Math.max(0, lines.length - page);
@@ -345,7 +365,7 @@ export class AgentInspectorComponent {
     const footer = this.theme.fg(
       "dim",
       this.detail
-        ? `Esc back · ↑↓ scroll · PgUp/PgDn · Home/End · ${this.followLatest ? "following" : "paused"}`
+        ? `Esc back · ↑↓ scroll · PgUp/PgDn · Home/End · ${this.followLatest ? "following" : "paused"}${run?.status === "running" ? " · x stop" : ""}`
         : "↑↓ select · Enter inspect · Esc close",
     );
     return [

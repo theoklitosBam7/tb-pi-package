@@ -87,11 +87,19 @@ export function buildArtifactPath(options: {
   return path.join(artifactDir, fileName);
 }
 
+function getResultSummaryStatus(
+  result: Pick<SingleResult, "exitCode" | "stopReason">,
+): "completed" | "failed" | "aborted" {
+  if (result.stopReason === "aborted") return "aborted";
+  return getResultStatus(result) === "completed" ? "completed" : "failed";
+}
+
 function formatArtifactMarkdown(options: {
   agent: string;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "aborted";
   model?: string;
   exitCode: number;
+  stopReason?: string;
   taskLabel: string;
   startedAt: string;
   finishedAt: string;
@@ -106,6 +114,7 @@ function formatArtifactMarkdown(options: {
     `- Status: ${options.status}`,
     `- Model: ${options.model ?? "unknown"}`,
     `- Exit code: ${options.exitCode}`,
+    ...(options.stopReason ? [`- Stop reason: ${options.stopReason}`] : []),
     `- Task: ${options.taskLabel}`,
     `- Started: ${options.startedAt}`,
     `- Finished: ${options.finishedAt}`,
@@ -169,7 +178,7 @@ export function formatSingleSummary(
   result: Pick<SingleResult, "exitCode" | "stopReason">,
   outputPath: string,
 ): string {
-  return `Agent ${getResultStatus(result)}. Read this file before continuing: ${outputPath}`;
+  return `Agent ${getResultSummaryStatus(result)}. Read this file before continuing: ${outputPath}`;
 }
 
 export function formatChainSummary(
@@ -177,7 +186,7 @@ export function formatChainSummary(
 ): string {
   return results
     .map((result, index) => {
-      const status = getResultStatus(result);
+      const status = getResultSummaryStatus(result);
       const marker = index === results.length - 1 ? " (final)" : "";
       return `Step ${index + 1} ${status}${marker}. Read this file before continuing: ${result.outputPath}`;
     })
@@ -187,7 +196,7 @@ export function formatChainSummary(
 export function formatParallelSummary(results: ParallelSummaryItem[]): string {
   const successCount = results.filter((result) => getResultStatus(result) === "completed").length;
   const lines = results.map((result) => {
-    const status = getResultStatus(result);
+    const status = getResultSummaryStatus(result);
     return `[${result.agent}] ${status}. Read this file before continuing: ${result.outputPath}`;
   });
   return `Parallel: ${successCount}/${results.length} succeeded\n\n${lines.join("\n")}`;
@@ -235,15 +244,16 @@ export async function writeResultArtifact(options: {
   startedAt: string;
 }): Promise<string> {
   const { result, outputPath } = options;
-  const status = getResultStatus(result);
+  const status = getResultSummaryStatus(result);
   const finalOutput = getFinalOutput(result.messages);
   const displayItems = getToolCallDisplayItems(result.messages);
-  const diagnostics = status === "failed" ? getFailureDiagnostics(result) : {};
+  const diagnostics = status === "completed" ? {} : getFailureDiagnostics(result);
   const markdown = formatArtifactMarkdown({
     agent: result.agent,
-    status: status === "failed" ? "failed" : "completed",
+    status,
     model: result.model,
     exitCode: result.exitCode,
+    stopReason: result.stopReason,
     taskLabel: options.taskLabel,
     startedAt: options.startedAt,
     finishedAt: new Date().toISOString(),

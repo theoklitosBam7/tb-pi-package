@@ -33,7 +33,6 @@ import {
   AgentInspectorStore,
   getInspectorMessageText,
   getInspectorText,
-  type AgentInspectorRunHandle,
 } from "./inspector.js";
 import {
   type AgentOverridesSnapshot,
@@ -351,6 +350,12 @@ function isModelOrApiKeyError(stderr: string): boolean {
   );
 }
 
+function markResultAborted(result: SingleResult): void {
+  if (result.exitCode <= 0) result.exitCode = 1;
+  result.stopReason = "aborted";
+  result.errorMessage = "Agent was aborted";
+}
+
 async function runSingleAgent(
   defaultCwd: string,
   agents: AgentConfig[],
@@ -420,7 +425,16 @@ async function runSingleAgent(
     { modelOverride, parentModel: mainAgentModel },
   );
   const { modelsToTry } = resolvedOptions;
-  let inspectorRun: AgentInspectorRunHandle | undefined;
+  const runAbortController = new AbortController();
+  const forwardAbort = () => runAbortController.abort();
+  if (signal?.aborted) forwardAbort();
+  else signal?.addEventListener("abort", forwardAbort, { once: true });
+  const inspectorRun = inspector?.start({
+    agent: resolvedName,
+    task,
+    model: modelsToTry[0],
+  });
+  inspectorRun?.setStopper(() => runAbortController.abort());
 
   // Helper function to run with a specific model
   const runWithModel = async (model: string | undefined): Promise<SingleResult> => {
@@ -472,12 +486,13 @@ async function runSingleAgent(
         promptPath: tmpPromptPath ?? undefined,
         task,
       });
-      if (inspector && !inspectorRun) {
-        inspectorRun = inspector.start({ agent: resolvedName, task, model });
-      } else {
-        inspectorRun?.setModel(model);
-      }
+      inspectorRun?.setModel(model);
       let wasAborted = false;
+
+      if (runAbortController.signal.aborted) {
+        markResultAborted(currentResult);
+        return currentResult;
+      }
 
       const exitCode = await new Promise<number>((resolve) => {
         const invocation = getPiInvocation(args);
@@ -582,24 +597,18 @@ async function runSingleAgent(
           resolve(1);
         });
 
-        if (signal) {
-          cleanupAbort = installAbortHandler({
-            signal,
-            process: proc,
-            isClosed: () => closed,
-            onAbort: () => {
-              wasAborted = true;
-            },
-          });
-        }
+        cleanupAbort = installAbortHandler({
+          signal: runAbortController.signal,
+          process: proc,
+          isClosed: () => closed,
+          onAbort: () => {
+            wasAborted = true;
+          },
+        });
       });
 
       currentResult.exitCode = exitCode;
-      if (wasAborted) {
-        currentResult.exitCode = exitCode || 1;
-        currentResult.stopReason = "aborted";
-        currentResult.errorMessage = "Agent was aborted";
-      }
+      if (wasAborted) markResultAborted(currentResult);
       return currentResult;
     } finally {
       if (tmpPromptPath)
@@ -625,6 +634,11 @@ async function runSingleAgent(
       const result = await runWithModel(model);
       lastResult = result;
 
+      if (runAbortController.signal.aborted) {
+        markResultAborted(result);
+        return result;
+      }
+
       // Success - return immediately
       if (isCompletedResult(result)) {
         return result;
@@ -645,6 +659,7 @@ async function runSingleAgent(
     // Should not reach here, but return last result just in case
     return lastResult!;
   } finally {
+    signal?.removeEventListener("abort", forwardAbort);
     if (inspectorRun?.status() === "running") {
       const status =
         lastResult?.stopReason === "aborted"
