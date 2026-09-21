@@ -11,6 +11,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 ## Features
 
 - **Subagent tool** — Delegate tasks to specialized agents with isolated context windows. Supports single, parallel, and chained (sequential) execution modes.
+- **Ask user tool** — Ask one or more structured questions and collect answers in TUI or RPC mode.
 - **Web search & fetch** — Search DuckDuckGo and fetch page content directly from pi.
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
 - **Commands browser** — List all registered slash commands via `/commands`.
@@ -39,6 +40,7 @@ Once installed, the package's extensions, agents, and prompts are available auto
 | Extension     | Tool(s)                   | Command            | Description                                                              |
 | ------------- | ------------------------- | ------------------ | ------------------------------------------------------------------------ |
 | `subagent`    | `agent`                   | `/agent-inspector` | Spawn and inspect isolated agents for single, parallel, or chained tasks |
+| `ask-user`    | `ask_user`                | —                  | Ask structured questions in TUI or RPC mode                              |
 | `web-search`  | `web_search`, `web_fetch` | —                  | Search the web and fetch page content                                    |
 | `list-agents` | `list_agents`             | `/agents`          | Discover and browse agent definitions                                    |
 | `commands`    | —                         | `/commands`        | List all registered slash commands                                       |
@@ -142,6 +144,8 @@ Invalid settings fail before the affected agent starts. `list_agents` marks inva
 tb-pi-package/
 ├── agents/              # Agent definitions (Markdown with frontmatter)
 ├── extensions/
+│   ├── ask-user/        # ask_user questionnaire tool
+│   │   └── index.ts
 │   ├── commands.ts      # /commands slash command
 │   ├── list-agents.ts   # /agents command + list_agents tool
 │   ├── subagent/        # Agent tool (single/parallel/chain modes)
