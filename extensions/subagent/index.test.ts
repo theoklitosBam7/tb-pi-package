@@ -132,6 +132,20 @@ describe("artifact summaries", () => {
         "Step 2 failed (final). Read this file before continuing: /sessions/run/step-2.md",
     );
   });
+
+  it("labels a user-aborted result as aborted in summaries", () => {
+    const result = { exitCode: 1, stopReason: "aborted" } as const;
+
+    expect(formatSingleSummary(result, "/sessions/run/result.md")).toContain("Agent aborted.");
+    expect(formatChainSummary([{ ...result, outputPath: "/sessions/run/step-1.md" }])).toContain(
+      "Step 1 aborted (final).",
+    );
+    expect(
+      formatParallelSummary([
+        { ...result, agent: "worker", outputPath: "/sessions/run/worker.md" },
+      ]),
+    ).toContain("[worker] aborted.");
+  });
 });
 
 describe("formatParallelSummary", () => {
@@ -259,7 +273,8 @@ describe("writeResultArtifact", () => {
       });
 
       const artifact = fs.readFileSync(outputPath, "utf8");
-      expect(artifact).toContain("- Status: failed");
+      expect(artifact).toContain("- Status: aborted");
+      expect(artifact).toContain("- Stop reason: aborted");
       expect(artifact).toContain("## Result\n\npartial response");
       expect(artifact).toContain(
         "## Failure diagnostics\n\n### Error message\n\nAgent was aborted\n\n### Stderr\n\nchild stderr diagnostic",

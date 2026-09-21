@@ -249,6 +249,67 @@ describe("subagent inspector live bridge", () => {
     },
   );
 
+  it("stops one parallel run while its sibling continues", async () => {
+    const fixture = executionFixture();
+    const execution = fixture.execute({
+      tasks: [
+        { agent: "worker", task: "First" },
+        { agent: "worker", task: "Second" },
+      ],
+    });
+    await vi.waitFor(() => expect(fixture.children).toHaveLength(2));
+
+    const open = fixture.commands["agent-inspector"].handler("", fixture.ctx);
+    fixture.views[0].handleInput("\r");
+    expect(fixture.output()).toContain("run-2");
+    fixture.children[1].send({
+      type: "tool_execution_start",
+      toolCallId: "tool",
+      toolName: "bash",
+      args: { command: "sleep 100" },
+    });
+    fixture.views[0].handleInput("x");
+
+    expect(fixture.children[1].kill).toHaveBeenCalledWith("SIGTERM");
+    expect(fixture.children[0].kill).not.toHaveBeenCalled();
+    fixture.children[1].emit("close", null, "SIGTERM");
+    fixture.children[0].emit("close", 0);
+    const result = await execution;
+
+    expect(result.details.results[1].stopReason).toBe("aborted");
+    expect(fixture.output()).toContain("run-2 · worker · ■ aborted");
+    expect(fixture.output()).toContain("tool · bash · ■ aborted");
+    fixture.views[0].handleInput("\x1b");
+    const list = fixture.output();
+    expect(list).toContain("run-1 · worker · ✓ completed");
+    expect(list).toContain("run-2 · worker · ■ aborted");
+    fixture.views[0].handleInput("\x1b");
+    await open;
+  });
+
+  it("does not spawn a fallback after a stop between attempts", async () => {
+    const fixture = executionFixture();
+    fs.writeFileSync(
+      path.join(fixture.project, ".pi", "agents", "worker.md"),
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    const execution = fixture.execute({ agent: "worker", task: "Review", model: "test/primary" });
+    await vi.waitFor(() => expect(fixture.children).toHaveLength(1));
+
+    const open = fixture.commands["agent-inspector"].handler("", fixture.ctx);
+    fixture.views[0].handleInput("\r");
+    fixture.children[0].stderr.emit("data", "No API key");
+    fixture.children[0].emit("close", 1);
+    fixture.views[0].handleInput("x");
+
+    await execution;
+    expect(fixture.children).toHaveLength(1);
+    expect(fixture.output()).toContain("run-1 · worker · ■ aborted");
+    fixture.views[0].handleInput("\x1b");
+    fixture.views[0].handleInput("\x1b");
+    await open;
+  });
+
   it("keeps model fallback attempts in one run and shows the current model", async () => {
     const fixture = executionFixture();
     fs.writeFileSync(
@@ -486,7 +547,54 @@ function inspectorView(store: AgentInspectorStore, rows = 20, columns = 100) {
   return { component, tui, done };
 }
 
+describe("subagent inspector store", () => {
+  it("stops only running runs and clears the stopper when a run finishes", () => {
+    const store = new AgentInspectorStore();
+    const run = store.start({ agent: "worker", task: "Review" });
+    const runId = store.snapshot()[0].id;
+    const stopper = vi.fn();
+    run.setStopper(stopper);
+
+    expect(store.stop(runId)).toBe(true);
+    expect(stopper).toHaveBeenCalledOnce();
+
+    run.finish("aborted");
+    expect(store.stop(runId)).toBe(false);
+  });
+});
+
 describe("subagent inspector TUI", () => {
+  it("stops a running run only from its detail view", () => {
+    const store = new AgentInspectorStore();
+    const finished = store.start({ agent: "finished", task: "Done" });
+    finished.finish("completed");
+    const running = store.start({ agent: "running", task: "Work" });
+    const stopper = vi.fn();
+    running.setStopper(stopper);
+    const { component } = inspectorView(store);
+
+    expect(component.render(80).at(-1)).not.toContain("x stop");
+    component.handleInput("x");
+    expect(stopper).not.toHaveBeenCalled();
+
+    component.handleInput("\r");
+    expect(component.render(80).at(-1)).toContain("x stop");
+    component.handleInput("x");
+    expect(stopper).toHaveBeenCalledOnce();
+
+    running.finish("aborted");
+    expect(component.render(80).join("\n")).toContain("■ aborted");
+    expect(component.render(80).at(-1)).not.toContain("x stop");
+    component.handleInput("x");
+    expect(stopper).toHaveBeenCalledOnce();
+
+    component.handleInput("\x1b");
+    component.handleInput("\x1b[B");
+    component.handleInput("x");
+    expect(stopper).toHaveBeenCalledOnce();
+    component.dispose();
+  });
+
   it("renders in pi's overlay and keeps Escape from reaching the parent view", () => {
     let input: (data: string) => void = () => {};
     const write = vi.fn();
