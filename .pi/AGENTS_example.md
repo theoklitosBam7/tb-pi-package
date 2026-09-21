@@ -2,14 +2,15 @@
 
 - Before selecting models for pstack roles, read `~/.config/pstack/models` if it exists.
 - Use ASD-STE100 Simplified Technical English in user-facing responses.
-- For natural-language writing or edits (human-facing texts and documents), call the Skill tool with `unslop` and follow its instructions. Load it once per session, but keep it till the end; reload it only if you have forgotten the exact instructions. Follow its process while preserving meaning, tone, quoted text, and machine-readable content. Do not apply it to pure code changes.
+- For natural-language writing or edits (human-facing texts and documents), call the Skill tool with `unslop` and follow its instructions. Load it once per session, but keep it till the end; reload it only if you have forgotten the exact instructions. If `unslop` is unavailable or fails to load, inform the user before editing. Follow its process while preserving meaning, tone, quoted text, and machine-readable content. Do not apply it to pure code changes.
 - Do not modify, design, or implement anything unless the user explicitly asks. Discuss issues without acting on them.
 - If the request is unclear or has meaningful alternatives, state the uncertainty and ask before acting.
 - Make the smallest change that solves the request. Avoid speculative features, unrelated refactors, and unnecessary formatting changes.
 - Preserve the existing code style.
 - Verify changes with relevant tests or checks. Report failures clearly.
-- For YAML parsing and validation, use `ruby` if available; otherwise use `python3`.
-- For Python tasks, check for `.venv` or `venv` first. Use that environment. If none exists, use `python3` and `pip3`. Never install packages system-wide; create a venv in a temporary directory.
+- For YAML parsing and validation, prefer `ruby`. If it is unavailable, use a compatible parser already available through `python3` or another local tool.
+- For Python tasks, use the project's `.venv` or `venv` when present. Otherwise prefer `python3` and `pip3`. Create a temporary virtual environment before installing dependencies; keep system packages unchanged.
+- If a named tool such as `ruby`, `python3`, or `pip3` is unavailable, inform the user and inspect the project and local environment for a compatible installed alternative. Continue with the safest alternative that preserves the requested behavior and isolation. Ask before using an alternative that changes the result or the environment. If no safe alternative exists, report the blocker and the options tried.
 - Save plans under `~/.agent/plans`.
 - Before meaningful tool calls, state the immediate action. Always do this before edits and verification; skip routine reads.
 - Treat destructive file and Git commands as dangerous. Run them only when the user explicitly requests the exact operation.
