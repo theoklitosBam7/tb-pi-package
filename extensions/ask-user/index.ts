@@ -178,7 +178,8 @@ function createQuestionComponent(
     if (inputMode) {
       container.addChild(new Text(theme.fg("muted", "Your answer:"), 1, 0));
       container.addChild(editor);
-      container.addChild(new Text(theme.fg("dim", "Enter to submit • Esc to cancel"), 1, 0));
+      const escapeHint = inputModeInitially ? "Esc to cancel" : "Esc to go back";
+      container.addChild(new Text(theme.fg("dim", `Enter to submit • ${escapeHint}`), 1, 0));
     } else {
       container.addChild(selectList);
       container.addChild(
@@ -249,6 +250,16 @@ function createQuestionComponent(
   };
 }
 
+function validateQuestionIds(questions: AskUserQuestion[]): void {
+  const ids = new Set<string>();
+  for (const question of questions) {
+    if (ids.has(question.id)) {
+      throw new Error(`ask_user question IDs must be unique; duplicate ID "${question.id}"`);
+    }
+    ids.add(question.id);
+  }
+}
+
 function answersById(answers: AskUserAnswer[]): AskUserAnswers {
   const entries: Array<[string, AskUserAnswer]> = answers.map((answer) => [answer.id, answer]);
   return Object.fromEntries(entries);
@@ -260,6 +271,20 @@ function questionTitle(question: AskUserQuestion): string {
 
 function displayOption(option: AskUserOption): string {
   return option.description ? `${option.label} - ${option.description}` : option.label;
+}
+
+function rpcOptionDisplays(options: AskUserOption[]): string[] {
+  const displayedOptions = options.map(displayOption);
+  const seen = new Set<string>();
+  for (const displayedOption of displayedOptions) {
+    if (seen.has(displayedOption)) {
+      throw new Error(
+        `ask_user RPC options must have unique display values; duplicate value "${displayedOption}"`,
+      );
+    }
+    seen.add(displayedOption);
+  }
+  return displayedOptions;
 }
 
 function rpcInput(dialogs: RpcDialogs, question: AskUserQuestion): Promise<string | undefined> {
@@ -313,7 +338,7 @@ async function askRpcQuestion(
 
   // RPC select options are plain strings, so the custom-choice label must not
   // shadow a declared option that already claims it.
-  const displayedOptions = options.map(displayOption);
+  const displayedOptions = rpcOptionDisplays(options);
   if (question.is_other && !displayedOptions.includes(OTHER_CHOICE)) {
     displayedOptions.push(OTHER_CHOICE);
   }
@@ -386,6 +411,8 @@ export default function askUser(pi: ExtensionAPI): void {
     parameters: AskUserParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      validateQuestionIds(params.questions);
+
       if (ctx.mode === "tui" && ctx.hasUI) {
         return result(
           await collectAnswers(params.questions, (question) =>

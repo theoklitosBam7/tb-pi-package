@@ -154,6 +154,65 @@ describe("ask_user", () => {
     });
   });
 
+  it("rejects duplicate question IDs before prompting", async () => {
+    const select = vi.fn();
+    const input = vi.fn();
+    const tool = registeredTool();
+
+    await expect(
+      tool.execute(
+        "call-duplicate-id",
+        {
+          questions: [
+            {
+              id: "choice",
+              question: "Database?",
+              options: [{ label: "SQLite" }],
+            },
+            {
+              id: "choice",
+              question: "Region?",
+              options: [{ label: "Europe" }],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        context("rpc", { select, input }),
+      ),
+    ).rejects.toThrow('ask_user question IDs must be unique; duplicate ID "choice"');
+    expect(select).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+  });
+
+  it("rejects ambiguous RPC option display values before prompting", async () => {
+    const select = vi.fn();
+    const input = vi.fn();
+    const tool = registeredTool();
+
+    await expect(
+      tool.execute(
+        "call-duplicate-display-value",
+        {
+          questions: [
+            {
+              id: "choice",
+              question: "Which option?",
+              options: [{ label: "A - B" }, { label: "A", description: "B" }],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        context("rpc", { select, input }),
+      ),
+    ).rejects.toThrow(
+      'ask_user RPC options must have unique display values; duplicate value "A - B"',
+    );
+    expect(select).not.toHaveBeenCalled();
+    expect(input).not.toHaveBeenCalled();
+  });
+
   it("answers a declared option labeled Other instead of forcing free-form input", async () => {
     const select = vi.fn().mockResolvedValue("Other");
     const input = vi.fn();
@@ -184,6 +243,66 @@ describe("ask_user", () => {
       answers: {
         follow_up: { id: "follow_up", kind: "option", value: "Other", label: "Other" },
       },
+    });
+  });
+
+  it("returns to the option list when Esc leaves custom Other input", async () => {
+    type Component = {
+      render(width: number): string[];
+      handleInput(data: string): void;
+    };
+    type Factory = (
+      tui: unknown,
+      theme: unknown,
+      keybindings: unknown,
+      done: (value: unknown) => void,
+    ) => Component;
+
+    let component: Component | undefined;
+    const custom = vi.fn((factory: Factory) => {
+      return new Promise<unknown>((resolve) => {
+        component = factory(
+          { requestRender() {}, terminal: { rows: 20, columns: 80 } },
+          {
+            fg: (_color: string, text: string) => text,
+            bold: (text: string) => text,
+          },
+          {},
+          resolve,
+        );
+      });
+    });
+    const tool = registeredTool();
+
+    const execution = tool.execute(
+      "call-other-back",
+      {
+        questions: [
+          {
+            id: "database",
+            question: "Which database should the migration target?",
+            options: [{ label: "PostgreSQL" }],
+            is_other: true,
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      context("tui", { custom }),
+    );
+
+    await vi.waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
+    component?.handleInput("\x1b[B");
+    component?.handleInput("\r");
+    expect(component?.render(80).join("\n")).toContain("Esc to go back");
+
+    component?.handleInput("\x1b");
+    expect(component?.render(80).join("\n")).toContain("PostgreSQL");
+    expect(component?.render(80).join("\n")).toContain("Esc cancel");
+
+    component?.handleInput("\x1b");
+    await expect(execution).resolves.toMatchObject({
+      details: { status: "cancelled", cancelled: true, answers: {} },
     });
   });
 
