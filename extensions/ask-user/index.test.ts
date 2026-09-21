@@ -235,13 +235,52 @@ describe("ask_user", () => {
       context("rpc", { select, input }),
     );
 
-    expect(select).toHaveBeenCalledWith("Should I follow up with the team?", ["Other"]);
+    expect(select).toHaveBeenCalledWith("Should I follow up with the team?", [
+      "Other",
+      "Other (custom answer)",
+    ]);
     expect(input).not.toHaveBeenCalled();
     expect(result.details).toEqual({
       status: "completed",
       cancelled: false,
       answers: {
         follow_up: { id: "follow_up", kind: "option", value: "Other", label: "Other" },
+      },
+    });
+  });
+
+  it("opens custom input from a disambiguated Other choice in RPC mode", async () => {
+    const select = vi.fn().mockResolvedValue("Other (custom answer)");
+    const input = vi.fn().mockResolvedValue("Use a custom follow-up");
+    const tool = registeredTool();
+
+    const result = await tool.execute(
+      "call-other-rpc-custom",
+      {
+        questions: [
+          {
+            id: "follow_up",
+            question: "Should I follow up with the team?",
+            options: [{ label: "Other" }],
+            is_other: true,
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      context("rpc", { select, input }),
+    );
+
+    expect(select).toHaveBeenCalledWith("Should I follow up with the team?", [
+      "Other",
+      "Other (custom answer)",
+    ]);
+    expect(input).toHaveBeenCalledWith("Should I follow up with the team?", "Type your answer");
+    expect(result.details).toEqual({
+      status: "completed",
+      cancelled: false,
+      answers: {
+        follow_up: { id: "follow_up", kind: "text", value: "Use a custom follow-up" },
       },
     });
   });

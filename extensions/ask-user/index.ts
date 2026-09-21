@@ -83,6 +83,7 @@ export type AskUserDetails =
 type QuestionInteraction = { kind: "answer"; answer: AskUserAnswer } | { kind: "cancelled" };
 
 const OTHER_CHOICE = "Other";
+const CUSTOM_OTHER_CHOICE = "Other (custom answer)";
 
 type RpcDialogs = {
   ui: ExtensionContext["ui"];
@@ -141,7 +142,7 @@ function createQuestionComponent(
     );
     optionItems.push({
       value: "other",
-      label: otherLabelTaken ? `${OTHER_CHOICE} (custom answer)` : OTHER_CHOICE,
+      label: otherLabelTaken ? CUSTOM_OTHER_CHOICE : OTHER_CHOICE,
       description: "Enter a custom answer",
     });
   }
@@ -287,6 +288,19 @@ function rpcOptionDisplays(options: AskUserOption[]): string[] {
   return displayedOptions;
 }
 
+function rpcCustomOtherChoice(displayedOptions: string[]): string {
+  if (!displayedOptions.includes(OTHER_CHOICE)) return OTHER_CHOICE;
+  if (!displayedOptions.includes(CUSTOM_OTHER_CHOICE)) return CUSTOM_OTHER_CHOICE;
+
+  let suffix = 2;
+  let candidate = `${CUSTOM_OTHER_CHOICE} ${suffix}`;
+  while (displayedOptions.includes(candidate)) {
+    suffix += 1;
+    candidate = `${CUSTOM_OTHER_CHOICE} ${suffix}`;
+  }
+  return candidate;
+}
+
 function rpcInput(dialogs: RpcDialogs, question: AskUserQuestion): Promise<string | undefined> {
   const title = questionTitle(question);
   return dialogs.signal
@@ -336,12 +350,11 @@ async function askRpcQuestion(
       : { kind: "answer", answer: textAnswer(question.id, value) };
   }
 
-  // RPC select options are plain strings, so the custom-choice label must not
-  // shadow a declared option that already claims it.
+  // RPC select options are plain strings, so keep the custom choice distinct
+  // from declared options.
   const displayedOptions = rpcOptionDisplays(options);
-  if (question.is_other && !displayedOptions.includes(OTHER_CHOICE)) {
-    displayedOptions.push(OTHER_CHOICE);
-  }
+  const customOtherChoice = question.is_other ? rpcCustomOtherChoice(displayedOptions) : undefined;
+  if (customOtherChoice !== undefined) displayedOptions.push(customOtherChoice);
 
   const selected = await rpcSelect(dialogs, question, displayedOptions);
   if (selected === undefined || dialogs.signal?.aborted) return { kind: "cancelled" };
@@ -349,7 +362,7 @@ async function askRpcQuestion(
   const option = options[displayedOptions.indexOf(selected)];
   if (option) return { kind: "answer", answer: optionAnswer(question.id, option) };
 
-  if (question.is_other && selected === OTHER_CHOICE) {
+  if (customOtherChoice !== undefined && selected === customOtherChoice) {
     const value = await rpcInput(dialogs, question);
     return value === undefined || dialogs.signal?.aborted
       ? { kind: "cancelled" }
