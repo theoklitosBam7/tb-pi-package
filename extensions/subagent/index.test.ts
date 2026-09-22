@@ -640,7 +640,7 @@ function registerPersistenceTestTools(): Record<string, any> {
 }
 
 describe("nested usage persistence", () => {
-  it("captures nested agent usage before artifact persistence clears messages", async () => {
+  it("captures nested agent and tool-result usage before artifact persistence clears messages", async () => {
     const project = createPersistenceTestProject(
       "nested-test-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -734,6 +734,20 @@ describe("nested usage persistence", () => {
           toolName: "agent",
           content: [],
           details: nestedDetails,
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 1,
+            cacheWrite: 1,
+            totalTokens: 4,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0.1,
+            },
+          },
           isError: false,
           timestamp: 1,
         },
@@ -771,13 +785,13 @@ describe("nested usage persistence", () => {
 
     const result = await execution;
 
-    expect(result.details?.results[0].descendantUsage).toEqual({
-      input: 8,
-      output: 6,
-      cacheRead: 3,
-      cacheWrite: 1,
-      cost: 0.5,
+    expect(result.details?.results[0].descendantUsage).toMatchObject({
+      input: 9,
+      output: 7,
+      cacheRead: 4,
+      cacheWrite: 2,
     });
+    expect(result.details?.results[0].descendantUsage?.cost).toBeCloseTo(0.6);
     expect(result.details?.usageVersion).toBe(3);
     expect(result.details?.results[0].descendantRuns).toBe(1);
     expect(result.details?.results[0].messages).toEqual([]);
