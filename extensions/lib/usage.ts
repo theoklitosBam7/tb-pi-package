@@ -9,6 +9,10 @@ export interface UsageTotals {
   cost: number;
 }
 
+export interface UsageTotalsWithTurns extends UsageTotals {
+  turns: number;
+}
+
 const PiUsageSchema = Type.Object({
   input: Type.Number({ minimum: 0 }),
   output: Type.Number({ minimum: 0 }),
@@ -75,6 +79,28 @@ export function addUsageTotals(target: UsageTotals, source: UsageTotals): void {
   target.cacheRead += source.cacheRead;
   target.cacheWrite += source.cacheWrite;
   target.cost += source.cost;
+}
+
+export function createUsageTotalsWithTurns(): UsageTotalsWithTurns {
+  return { ...createUsageTotals(), turns: 0 };
+}
+
+export function addUsageTotalsWithTurns(
+  target: UsageTotalsWithTurns,
+  source: UsageTotalsWithTurns,
+): void {
+  addUsageTotals(target, source);
+  target.turns += source.turns;
+}
+
+export function hasUsageTotals(usage: UsageTotals): boolean {
+  return (
+    usage.input !== 0 ||
+    usage.output !== 0 ||
+    usage.cacheRead !== 0 ||
+    usage.cacheWrite !== 0 ||
+    usage.cost !== 0
+  );
 }
 
 export function parsePiUsage(value: unknown): UsageTotals | undefined {

@@ -1,13 +1,39 @@
 import { describe, expect, it } from "vitest";
 import {
   addUsageTotals,
+  addUsageTotalsWithTurns,
   createUsageTotals,
+  createUsageTotalsWithTurns,
   getPersistedSubagentUsage,
+  hasUsageTotals,
   parsePiUsage,
   parseSubagentUsage,
 } from "./usage.js";
 
 describe("usage totals", () => {
+  it("adds turn-aware totals and detects non-zero usage", () => {
+    const target = createUsageTotalsWithTurns();
+    addUsageTotalsWithTurns(target, {
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+      cost: 0.5,
+      turns: 2,
+    });
+
+    expect(target).toEqual({
+      input: 1,
+      output: 2,
+      cacheRead: 3,
+      cacheWrite: 4,
+      cost: 0.5,
+      turns: 2,
+    });
+    expect(hasUsageTotals(target)).toBe(true);
+    expect(hasUsageTotals(createUsageTotals())).toBe(false);
+  });
+
   it("parses and adds billed Pi usage without changing the raw buckets", () => {
     const target = createUsageTotals();
     const usage = parsePiUsage({

@@ -29,8 +29,11 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   addUsageTotals,
+  addUsageTotalsWithTurns,
   createUsageTotals,
+  createUsageTotalsWithTurns,
   getPersistedSubagentUsage,
+  hasUsageTotals,
   type PersistedSubagentDetails,
 } from "../lib/usage.js";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
@@ -644,19 +647,11 @@ async function runSingleAgent(
   };
 
   // Try models in order, falling back on model/API key errors
-  const previousUsage = createUsageTotals();
+  const previousUsage = createUsageTotalsWithTurns();
   const previousDescendantUsage = createUsageTotals();
-  let previousTurns = 0;
   const mergePreviousUsage = (result: SingleResult): SingleResult => {
-    addUsageTotals(result.usage, previousUsage);
-    result.usage.turns += previousTurns;
-    if (
-      previousDescendantUsage.input > 0 ||
-      previousDescendantUsage.output > 0 ||
-      previousDescendantUsage.cacheRead > 0 ||
-      previousDescendantUsage.cacheWrite > 0 ||
-      previousDescendantUsage.cost > 0
-    ) {
+    addUsageTotalsWithTurns(result.usage, previousUsage);
+    if (hasUsageTotals(previousDescendantUsage)) {
       result.descendantUsage ??= createUsageTotals();
       addUsageTotals(result.descendantUsage, previousDescendantUsage);
     }
@@ -686,8 +681,7 @@ async function runSingleAgent(
         return mergePreviousUsage(result);
       }
 
-      addUsageTotals(previousUsage, result.usage);
-      previousTurns += result.usage.turns;
+      addUsageTotalsWithTurns(previousUsage, result.usage);
       if (result.descendantUsage) addUsageTotals(previousDescendantUsage, result.descendantUsage);
 
       // Log fallback for debugging
@@ -1435,11 +1429,10 @@ export default function (pi: ExtensionAPI) {
       }
 
       const aggregateUsage = (results: SingleResult[]) => {
-        const total = { ...createUsageTotals(), turns: 0 };
+        const total = createUsageTotalsWithTurns();
         for (const r of results) {
-          addUsageTotals(total, r.usage);
+          addUsageTotalsWithTurns(total, r.usage);
           if (r.descendantUsage) addUsageTotals(total, r.descendantUsage);
-          total.turns += r.usage.turns;
         }
         return total;
       };
