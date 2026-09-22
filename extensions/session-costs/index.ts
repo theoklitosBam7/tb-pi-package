@@ -18,7 +18,7 @@ export interface SessionUsageReport {
   warnings: string[];
 }
 
-function formatTokenCount(value: number): string {
+function formatCount(value: number): string {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits: 20,
     useGrouping: true,
@@ -45,24 +45,24 @@ export function formatSessionCosts(report: SessionUsageReport): string {
     "Session costs",
     "",
     "Main agent",
-    `  Prompt: ${formatTokenCount(getPromptTokens(report.main))}`,
-    `  Cached: ${formatTokenCount(report.main.cacheRead)}`,
-    `  Cache writes: ${formatTokenCount(report.main.cacheWrite)}`,
-    `  Output: ${formatTokenCount(report.main.output)}`,
-    `  Total: ${formatTokenCount(getTotalTokens(report.main))}`,
+    `  Prompt: ${formatCount(getPromptTokens(report.main))}`,
+    `  Cached: ${formatCount(report.main.cacheRead)}`,
+    `  Cache writes: ${formatCount(report.main.cacheWrite)}`,
+    `  Output: ${formatCount(report.main.output)}`,
+    `  Total: ${formatCount(getTotalTokens(report.main))}`,
     `  Cost: ${formatCost(report.main.cost)}`,
     "",
     "Subagents",
-    `  Runs: ${formatTokenCount(report.subagentRuns)}`,
-    `  Prompt: ${formatTokenCount(getPromptTokens(report.subagents))}`,
-    `  Cached: ${formatTokenCount(report.subagents.cacheRead)}`,
-    `  Cache writes: ${formatTokenCount(report.subagents.cacheWrite)}`,
-    `  Output: ${formatTokenCount(report.subagents.output)}`,
-    `  Total: ${formatTokenCount(getTotalTokens(report.subagents))}`,
+    `  Runs: ${formatCount(report.subagentRuns)}`,
+    `  Prompt: ${formatCount(getPromptTokens(report.subagents))}`,
+    `  Cached: ${formatCount(report.subagents.cacheRead)}`,
+    `  Cache writes: ${formatCount(report.subagents.cacheWrite)}`,
+    `  Output: ${formatCount(report.subagents.output)}`,
+    `  Total: ${formatCount(getTotalTokens(report.subagents))}`,
     `  Cost: ${formatCost(report.subagents.cost)}`,
     "",
     "Combined",
-    `  Total: ${formatTokenCount(getTotalTokens(combined))} tokens`,
+    `  Total: ${formatCount(getTotalTokens(combined))} tokens`,
     `  Cost: ${formatCost(combined.cost)}`,
   ];
   if (report.warnings.length > 0) {
