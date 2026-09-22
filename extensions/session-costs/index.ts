@@ -79,17 +79,20 @@ export function collectSessionUsage(entries: readonly SessionEntry[]): SessionUs
     warnings: [],
   };
 
+  const addMainUsage = (value: unknown): void => {
+    const usage = parsePiUsage(value);
+    if (usage) addUsageTotals(report.main, usage);
+  };
+
   for (const entry of entries) {
     if (entry.type === "compaction" || entry.type === "branch_summary") {
-      const usage = parsePiUsage(entry.usage);
-      if (usage) addUsageTotals(report.main, usage);
+      addMainUsage(entry.usage);
       continue;
     }
 
     if (entry.type !== "message") continue;
     if (entry.message.role === "assistant") {
-      const usage = parsePiUsage(entry.message.usage);
-      if (usage) addUsageTotals(report.main, usage);
+      addMainUsage(entry.message.usage);
     } else if (entry.message.role === "toolResult") {
       if (entry.message.toolName === "agent") {
         const subagentUsage = getPersistedSubagentUsage(entry.message.details);
@@ -97,15 +100,13 @@ export function collectSessionUsage(entries: readonly SessionEntry[]): SessionUs
           addUsageTotals(report.subagents, subagentUsage.totals);
           report.subagentRuns += subagentUsage.runs;
         } else {
-          const usage = parsePiUsage(entry.message.usage);
-          if (usage) addUsageTotals(report.main, usage);
+          addMainUsage(entry.message.usage);
         }
         for (const warning of subagentUsage.warnings) {
           if (!report.warnings.includes(warning)) report.warnings.push(warning);
         }
       } else {
-        const usage = parsePiUsage(entry.message.usage);
-        if (usage) addUsageTotals(report.main, usage);
+        addMainUsage(entry.message.usage);
       }
     }
   }
