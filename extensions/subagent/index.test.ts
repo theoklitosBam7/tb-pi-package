@@ -609,32 +609,46 @@ describe("subagent rendering", () => {
   });
 });
 
+function createPersistenceTestProject(prefix: string, agentDefinition: string): string {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), `subagent-${prefix}`));
+  vi.stubEnv("PI_CODING_AGENT_DIR", project);
+  const agentsDir = path.join(project, ".pi", "agents");
+  fs.mkdirSync(agentsDir, { recursive: true });
+  fs.writeFileSync(path.join(agentsDir, "worker.md"), agentDefinition);
+  return project;
+}
+
+function createPersistenceTestChild() {
+  return Object.assign(new EventEmitter(), {
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+    kill: vi.fn(),
+  });
+}
+
+function registerPersistenceTestTools(): Record<string, any> {
+  const tools: Record<string, any> = {};
+  subagentExtension({
+    on() {},
+    registerTool(tool: any) {
+      tools[tool.name] = tool;
+    },
+    registerCommand() {},
+    registerShortcut() {},
+  } as any);
+  return tools;
+}
+
 describe("nested usage persistence", () => {
   it("captures nested agent usage before artifact persistence clears messages", async () => {
-    const project = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-nested-test-"));
-    vi.stubEnv("PI_CODING_AGENT_DIR", project);
-    const agentsDir = path.join(project, ".pi", "agents");
-    fs.mkdirSync(agentsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(agentsDir, "worker.md"),
+    const project = createPersistenceTestProject(
+      "nested-test-",
       "---\nname: worker\ndescription: Test worker\n---\n",
     );
-    const child = Object.assign(new EventEmitter(), {
-      stdout: new EventEmitter(),
-      stderr: new EventEmitter(),
-      kill: vi.fn(),
-    });
+    const child = createPersistenceTestChild();
     vi.mocked(spawn).mockReturnValue(child as never);
 
-    const tools: Record<string, any> = {};
-    subagentExtension({
-      on() {},
-      registerTool(tool: any) {
-        tools[tool.name] = tool;
-      },
-      registerCommand() {},
-      registerShortcut() {},
-    } as any);
+    const tools = registerPersistenceTestTools();
 
     const execution = tools.agent.execute(
       "call-parent",
@@ -743,37 +757,18 @@ describe("nested usage persistence", () => {
   });
 
   it("retains usage from failed model attempts when a fallback succeeds", async () => {
-    const project = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-fallback-test-"));
-    vi.stubEnv("PI_CODING_AGENT_DIR", project);
-    const agentsDir = path.join(project, ".pi", "agents");
-    fs.mkdirSync(agentsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(agentsDir, "worker.md"),
+    const project = createPersistenceTestProject(
+      "fallback-test-",
       "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
     );
-    const children: Array<ReturnType<typeof createChild>> = [];
-    function createChild() {
-      return Object.assign(new EventEmitter(), {
-        stdout: new EventEmitter(),
-        stderr: new EventEmitter(),
-        kill: vi.fn(),
-      });
-    }
+    const children: Array<ReturnType<typeof createPersistenceTestChild>> = [];
     vi.mocked(spawn).mockImplementation(() => {
-      const child = createChild();
+      const child = createPersistenceTestChild();
       children.push(child);
       return child as never;
     });
 
-    const tools: Record<string, any> = {};
-    subagentExtension({
-      on() {},
-      registerTool(tool: any) {
-        tools[tool.name] = tool;
-      },
-      registerCommand() {},
-      registerShortcut() {},
-    } as any);
+    const tools = registerPersistenceTestTools();
     const execution = tools.agent.execute(
       "call-fallback",
       {
