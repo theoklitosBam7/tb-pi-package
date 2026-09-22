@@ -81,10 +81,10 @@ describe("usage totals", () => {
     expect(parsePiUsage(null)).toBeUndefined();
   });
 
-  it("sums direct and descendant usage from a valid v2 subagent record", () => {
+  it("sums direct and descendant usage and runs from a valid v3 subagent record", () => {
     expect(
       getPersistedSubagentUsage({
-        usageVersion: 2,
+        usageVersion: 3,
         mode: "single",
         agentScope: "user",
         projectAgentsDir: null,
@@ -112,6 +112,7 @@ describe("usage totals", () => {
               cacheWrite: 0,
               cost: 0.2,
             },
+            descendantRuns: 3,
           },
         ],
       }),
@@ -123,7 +124,7 @@ describe("usage totals", () => {
         cacheWrite: 1,
         cost: 0.7,
       },
-      runs: 1,
+      runs: 4,
       recognized: true,
       warnings: [],
     });
@@ -140,7 +141,7 @@ describe("usage totals", () => {
     expect(legacy.warnings).toContain("Nested usage is unavailable for legacy subagent records.");
 
     const future = getPersistedSubagentUsage({
-      usageVersion: 3,
+      usageVersion: 4,
       mode: "single",
       agentScope: "user",
       projectAgentsDir: null,
@@ -148,7 +149,7 @@ describe("usage totals", () => {
     });
     expect(future.recognized).toBe(true);
     expect(future.warnings).toContain(
-      "Subagent details use unsupported usage version 3; nested usage may be unavailable.",
+      "Subagent details use unsupported usage version 4; nested usage may be unavailable.",
     );
 
     const malformed = getPersistedSubagentUsage({ results: "not-an-array" });

@@ -70,7 +70,7 @@ const subagentEntry = (
     toolName: "agent",
     content: [],
     details: {
-      usageVersion: 2,
+      usageVersion: 3,
       mode,
       agentScope: "user",
       projectAgentsDir: null,
@@ -247,6 +247,7 @@ describe("collectSessionUsage", () => {
               cacheWrite: 1,
               cost: 0.2,
             },
+            descendantRuns: 3,
           },
         ],
         usage({ input: 100, output: 100, cacheRead: 100, cacheWrite: 100, cost: 10 }),
@@ -267,7 +268,7 @@ describe("collectSessionUsage", () => {
       cacheWrite: 1,
     });
     expect(report.subagents.cost).toBeCloseTo(0.3);
-    expect(report.subagentRuns).toBe(1);
+    expect(report.subagentRuns).toBe(4);
     expect(report.warnings).toEqual([]);
   });
 

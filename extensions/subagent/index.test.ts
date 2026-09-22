@@ -739,18 +739,47 @@ describe("nested usage persistence", () => {
         },
       })}\n`,
     );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "toolResult",
+          toolCallId: "tool-call",
+          toolName: "web_search",
+          content: [],
+          usage: {
+            input: 5,
+            output: 4,
+            cacheRead: 2,
+            cacheWrite: 1,
+            totalTokens: 12,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0.3,
+            },
+          },
+          isError: false,
+          timestamp: 2,
+        },
+      })}\n`,
+    );
     child.emit("close", 0, null);
 
     const result = await execution;
 
     expect(result.details?.results[0].descendantUsage).toEqual({
-      input: 3,
-      output: 2,
-      cacheRead: 1,
-      cacheWrite: 0,
-      cost: 0.2,
+      input: 8,
+      output: 6,
+      cacheRead: 3,
+      cacheWrite: 1,
+      cost: 0.5,
     });
-    expect(result.details?.usageVersion).toBe(2);
+    expect(result.details?.usageVersion).toBe(3);
+    expect(result.details?.results[0].descendantRuns).toBe(1);
     expect(result.details?.results[0].messages).toEqual([]);
     fs.rmSync(project, { recursive: true, force: true });
     vi.mocked(spawn).mockReset();

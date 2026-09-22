@@ -34,6 +34,7 @@ import {
   createUsageTotalsWithTurns,
   getPersistedSubagentUsage,
   hasUsageTotals,
+  parsePiUsage,
   type PersistedSubagentDetails,
 } from "../lib/usage.js";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
@@ -488,11 +489,22 @@ async function runSingleAgent(
     };
 
     const captureNestedUsage = (message: Message): void => {
-      if (message.role !== "toolResult" || message.toolName !== "agent") return;
+      if (message.role !== "toolResult") return;
+
+      const toolUsage = parsePiUsage(message.usage);
+      if (toolUsage) {
+        currentResult.descendantUsage ??= createUsageTotals();
+        addUsageTotals(currentResult.descendantUsage, toolUsage);
+      }
+
+      if (message.toolName !== "agent") return;
       const nestedUsage = getPersistedSubagentUsage(message.details);
       if (nestedUsage.recognized) {
         currentResult.descendantUsage ??= createUsageTotals();
         addUsageTotals(currentResult.descendantUsage, nestedUsage.totals);
+        if (nestedUsage.runs > 0) {
+          currentResult.descendantRuns = (currentResult.descendantRuns ?? 0) + nestedUsage.runs;
+        }
       }
     };
 
@@ -649,11 +661,15 @@ async function runSingleAgent(
   // Try models in order, falling back on model/API key errors
   const previousUsage = createUsageTotalsWithTurns();
   const previousDescendantUsage = createUsageTotals();
+  let previousDescendantRuns = 0;
   const mergePreviousUsage = (result: SingleResult): SingleResult => {
     addUsageTotalsWithTurns(result.usage, previousUsage);
     if (hasUsageTotals(previousDescendantUsage)) {
       result.descendantUsage ??= createUsageTotals();
       addUsageTotals(result.descendantUsage, previousDescendantUsage);
+    }
+    if (previousDescendantRuns > 0) {
+      result.descendantRuns = (result.descendantRuns ?? 0) + previousDescendantRuns;
     }
     return result;
   };
@@ -683,6 +699,7 @@ async function runSingleAgent(
 
       addUsageTotalsWithTurns(previousUsage, result.usage);
       if (result.descendantUsage) addUsageTotals(previousDescendantUsage, result.descendantUsage);
+      previousDescendantRuns += result.descendantRuns ?? 0;
 
       // Log fallback for debugging
       const nextModel = modelsToTry[i + 1];
@@ -880,7 +897,7 @@ export default function (pi: ExtensionAPI) {
       const makeDetails =
         (mode: "single" | "parallel" | "chain") =>
         (results: SingleResult[]): SubagentDetails => ({
-          usageVersion: 2,
+          usageVersion: 3,
           mode,
           agentScope,
           projectAgentsDir: discovery.projectAgentsDir,

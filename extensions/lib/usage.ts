@@ -44,6 +44,7 @@ const PersistedSubagentResultSchema = Type.Object({
   stderr: Type.String(),
   usage: SubagentUsageSchema,
   descendantUsage: Type.Optional(SubagentUsageSchema),
+  descendantRuns: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 const PersistedSubagentDetailsSchema = Type.Object({
@@ -139,7 +140,10 @@ export function getPersistedSubagentUsage(details: unknown): PersistedSubagentUs
 
   const persisted: PersistedSubagentDetails = details;
   const totals = createUsageTotals();
+  let runs = 0;
   for (const result of persisted.results) {
+    runs++;
+    runs += result.descendantRuns ?? 0;
     const directUsage = parseSubagentUsage(result.usage);
     if (directUsage) addUsageTotals(totals, directUsage);
     const descendantUsage = parseSubagentUsage(result.descendantUsage);
@@ -148,12 +152,12 @@ export function getPersistedSubagentUsage(details: unknown): PersistedSubagentUs
 
   return {
     totals,
-    runs: persisted.results.length,
+    runs,
     recognized: true,
     warnings:
       persisted.usageVersion === undefined || persisted.usageVersion < 2
         ? ["Nested usage is unavailable for legacy subagent records."]
-        : persisted.usageVersion > 2
+        : persisted.usageVersion > 3
           ? [
               `Subagent details use unsupported usage version ${persisted.usageVersion}; nested usage may be unavailable.`,
             ]

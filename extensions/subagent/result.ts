@@ -55,6 +55,7 @@ export interface SingleResult {
   stderr: string;
   usage: UsageStats;
   descendantUsage?: UsageTotals;
+  descendantRuns?: number;
   model?: string;
   thinking?: SubagentThinkingLevel;
   systemPromptOverridden?: boolean;
