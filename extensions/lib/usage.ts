@@ -77,12 +77,6 @@ export function addUsageTotals(target: UsageTotals, source: UsageTotals): void {
   target.cost += source.cost;
 }
 
-export function sumUsageTotals(values: readonly UsageTotals[]): UsageTotals {
-  const total = createUsageTotals();
-  for (const value of values) addUsageTotals(total, value);
-  return total;
-}
-
 export function parseUsageTotals(
   value: unknown,
   sourceKind: "pi" | "subagent",
