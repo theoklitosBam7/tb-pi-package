@@ -27,7 +27,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { addUsageTotals, createUsageTotals, getPersistedSubagentUsage } from "../lib/usage.js";
+import {
+  addUsageTotals,
+  createUsageTotals,
+  getPersistedSubagentUsage,
+  type PersistedSubagentDetails,
+} from "../lib/usage.js";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
 import {
   AgentInspectorComponent,
@@ -234,13 +239,9 @@ function formatToolCall(
   }
 }
 
-interface SubagentDetails {
-  usageVersion: 2;
-  mode: "single" | "parallel" | "chain";
-  agentScope: AgentScope;
-  projectAgentsDir: string | null;
+type SubagentDetails = Omit<PersistedSubagentDetails, "results"> & {
   results: SingleResult[];
-}
+};
 
 type DisplayItem =
   | { type: "text"; text: string }

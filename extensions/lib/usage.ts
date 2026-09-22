@@ -50,7 +50,7 @@ const PersistedSubagentDetailsSchema = Type.Object({
   results: Type.Array(PersistedSubagentResultSchema),
 });
 
-type PersistedSubagentDetails = Static<typeof PersistedSubagentDetailsSchema>;
+export type PersistedSubagentDetails = Static<typeof PersistedSubagentDetailsSchema>;
 
 export interface PersistedSubagentUsage {
   totals: UsageTotals;
