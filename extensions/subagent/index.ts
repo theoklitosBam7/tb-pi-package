@@ -27,6 +27,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import {
+  addUsageTotals,
+  addUsageTotalsWithTurns,
+  createUsageTotals,
+  createUsageTotalsWithTurns,
+  getPersistedSubagentUsage,
+  hasUsageTotals,
+  parsePiUsage,
+  type PersistedSubagentDetails,
+} from "../lib/usage.js";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
 import {
   AgentInspectorComponent,
@@ -152,6 +162,15 @@ function formatUsageStats(
   return parts.join(" ");
 }
 
+function formatResultUsageStats(
+  result: Pick<SingleResult, "usage" | "descendantUsage">,
+  model?: string,
+): string {
+  const direct = formatUsageStats(result.usage, model);
+  const descendant = result.descendantUsage ? formatUsageStats(result.descendantUsage) : "";
+  return [direct, descendant ? `nested:${descendant}` : ""].filter(Boolean).join(" ");
+}
+
 function formatToolCall(
   toolName: string,
   args: Record<string, unknown>,
@@ -224,12 +243,9 @@ function formatToolCall(
   }
 }
 
-interface SubagentDetails {
-  mode: "single" | "parallel" | "chain";
-  agentScope: AgentScope;
-  projectAgentsDir: string | null;
+type SubagentDetails = Omit<PersistedSubagentDetails, "results"> & {
   results: SingleResult[];
-}
+};
 
 type DisplayItem =
   | { type: "text"; text: string }
@@ -472,6 +488,26 @@ async function runSingleAgent(
       }
     };
 
+    const captureNestedUsage = (message: Message): void => {
+      if (message.role !== "toolResult") return;
+
+      const toolUsage = parsePiUsage(message.usage);
+      if (toolUsage) {
+        currentResult.descendantUsage ??= createUsageTotals();
+        addUsageTotals(currentResult.descendantUsage, toolUsage);
+      }
+
+      if (message.toolName !== "agent") return;
+      const nestedUsage = getPersistedSubagentUsage(message.details);
+      if (nestedUsage.recognized) {
+        currentResult.descendantUsage ??= createUsageTotals();
+        addUsageTotals(currentResult.descendantUsage, nestedUsage.totals);
+        if (nestedUsage.runs > 0) {
+          currentResult.descendantRuns = (currentResult.descendantRuns ?? 0) + nestedUsage.runs;
+        }
+      }
+    };
+
     try {
       if (resolvedOptions.systemPrompt.trim()) {
         const tmp = await writePromptToTempFile(agent.name, resolvedOptions.systemPrompt);
@@ -543,6 +579,7 @@ async function runSingleAgent(
 
           if (event.type === "message_end" && event.message) {
             const msg = event.message as Message;
+            captureNestedUsage(msg);
             currentResult.messages.push(msg);
 
             if (msg.role === "assistant") {
@@ -564,11 +601,6 @@ async function runSingleAgent(
               if (msg.stopReason) currentResult.stopReason = msg.stopReason;
               if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
             }
-            emitUpdate();
-          }
-
-          if (event.type === "tool_result_end" && event.message) {
-            currentResult.messages.push(event.message as Message);
             emitUpdate();
           }
         };
@@ -627,6 +659,20 @@ async function runSingleAgent(
   };
 
   // Try models in order, falling back on model/API key errors
+  const previousUsage = createUsageTotalsWithTurns();
+  const previousDescendantUsage = createUsageTotals();
+  let previousDescendantRuns = 0;
+  const mergePreviousUsage = (result: SingleResult): SingleResult => {
+    addUsageTotalsWithTurns(result.usage, previousUsage);
+    if (hasUsageTotals(previousDescendantUsage)) {
+      result.descendantUsage ??= createUsageTotals();
+      addUsageTotals(result.descendantUsage, previousDescendantUsage);
+    }
+    if (previousDescendantRuns > 0) {
+      result.descendantRuns = (result.descendantRuns ?? 0) + previousDescendantRuns;
+    }
+    return result;
+  };
   let lastResult: SingleResult | undefined;
   try {
     for (let i = 0; i < modelsToTry.length; i++) {
@@ -636,20 +682,24 @@ async function runSingleAgent(
 
       if (runAbortController.signal.aborted) {
         markResultAborted(result);
-        return result;
+        return mergePreviousUsage(result);
       }
 
       // Success - return immediately
       if (isCompletedResult(result)) {
-        return result;
+        return mergePreviousUsage(result);
       }
 
       // Check if this is a model/API key error that warrants a fallback
       const shouldFallback = isModelOrApiKeyError(result.stderr) && i < modelsToTry.length - 1;
       if (!shouldFallback) {
         // No more fallbacks or error is not model-related
-        return result;
+        return mergePreviousUsage(result);
       }
+
+      addUsageTotalsWithTurns(previousUsage, result.usage);
+      if (result.descendantUsage) addUsageTotals(previousDescendantUsage, result.descendantUsage);
+      previousDescendantRuns += result.descendantRuns ?? 0;
 
       // Log fallback for debugging
       const nextModel = modelsToTry[i + 1];
@@ -657,7 +707,7 @@ async function runSingleAgent(
     }
 
     // Should not reach here, but return last result just in case
-    return lastResult!;
+    return lastResult ? mergePreviousUsage(lastResult) : lastResult!;
   } finally {
     signal?.removeEventListener("abort", forwardAbort);
     if (inspectorRun?.status() === "running") {
@@ -847,6 +897,7 @@ export default function (pi: ExtensionAPI) {
       const makeDetails =
         (mode: "single" | "parallel" | "chain") =>
         (results: SingleResult[]): SubagentDetails => ({
+          usageVersion: 3,
           mode,
           agentScope,
           projectAgentsDir: discovery.projectAgentsDir,
@@ -1371,7 +1422,7 @@ export default function (pi: ExtensionAPI) {
               container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
             }
           }
-          const usageStr = formatUsageStats(r.usage, r.model);
+          const usageStr = formatResultUsageStats(r, r.model);
           if (usageStr) {
             container.addChild(new Spacer(1));
             container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
@@ -1389,27 +1440,16 @@ export default function (pi: ExtensionAPI) {
           if (displayItems.length > COLLAPSED_ITEM_COUNT)
             text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
         }
-        const usageStr = formatUsageStats(r.usage, r.model);
+        const usageStr = formatResultUsageStats(r, r.model);
         if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
         return new Text(text, 0, 0);
       }
 
       const aggregateUsage = (results: SingleResult[]) => {
-        const total = {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          cost: 0,
-          turns: 0,
-        };
+        const total = createUsageTotalsWithTurns();
         for (const r of results) {
-          total.input += r.usage.input;
-          total.output += r.usage.output;
-          total.cacheRead += r.usage.cacheRead;
-          total.cacheWrite += r.usage.cacheWrite;
-          total.cost += r.usage.cost;
-          total.turns += r.usage.turns;
+          addUsageTotalsWithTurns(total, r.usage);
+          if (r.descendantUsage) addUsageTotals(total, r.descendantUsage);
         }
         return total;
       };
@@ -1474,7 +1514,7 @@ export default function (pi: ExtensionAPI) {
               container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
             }
 
-            const stepUsage = formatUsageStats(r.usage, r.model);
+            const stepUsage = formatResultUsageStats(r, r.model);
             if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
           }
 
@@ -1566,7 +1606,7 @@ export default function (pi: ExtensionAPI) {
               container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
             }
 
-            const taskUsage = formatUsageStats(r.usage, r.model);
+            const taskUsage = formatResultUsageStats(r, r.model);
             if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
           }
 

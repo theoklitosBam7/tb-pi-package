@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import type { UsageTotals, UsageTotalsWithTurns } from "../lib/usage.js";
 import type { SubagentThinkingLevel } from "./overrides.js";
 
 interface AbortableProcess {
@@ -35,14 +36,8 @@ export function installAbortHandler(options: {
   };
 }
 
-export interface UsageStats {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
+export interface UsageStats extends UsageTotalsWithTurns {
   contextTokens: number;
-  turns: number;
 }
 
 export interface ResultDisplayItem {
@@ -59,6 +54,8 @@ export interface SingleResult {
   messages: Message[];
   stderr: string;
   usage: UsageStats;
+  descendantUsage?: UsageTotals;
+  descendantRuns?: number;
   model?: string;
   thinking?: SubagentThinkingLevel;
   systemPromptOverridden?: boolean;

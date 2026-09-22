@@ -15,6 +15,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 - **Web search & fetch** — Search DuckDuckGo and fetch page content directly from pi.
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
 - **Commands browser** — List all registered slash commands via `/commands`.
+- **Session cost report** — View main-agent, subagent, nested, and combined token and cost totals with `/session-costs`.
 - **4 built-in agents:** Scout, researcher, implementer, and reviewer, each tuned for a specific task.
 - **Workflow prompts:** Reusable templates for scouting, research, implementation, review, implementation review, and wiki generation.
 
@@ -37,13 +38,22 @@ Once installed, the package's extensions, agents, and prompts are available auto
 
 ### Extensions
 
-| Extension     | Tool(s)                   | Command            | Description                                                              |
-| ------------- | ------------------------- | ------------------ | ------------------------------------------------------------------------ |
-| `subagent`    | `agent`                   | `/agent-inspector` | Spawn and inspect isolated agents for single, parallel, or chained tasks |
-| `ask-user`    | `ask_user`                | —                  | Ask structured questions in TUI or RPC mode                              |
-| `web-search`  | `web_search`, `web_fetch` | —                  | Search the web and fetch page content                                    |
-| `list-agents` | `list_agents`             | `/agents`          | Discover and browse agent definitions                                    |
-| `commands`    | —                         | `/commands`        | List all registered slash commands                                       |
+| Extension       | Tool(s)                   | Command            | Description                                                              |
+| --------------- | ------------------------- | ------------------ | ------------------------------------------------------------------------ |
+| `subagent`      | `agent`                   | `/agent-inspector` | Spawn and inspect isolated agents for single, parallel, or chained tasks |
+| `ask-user`      | `ask_user`                | —                  | Ask structured questions in TUI or RPC mode                              |
+| `web-search`    | `web_search`, `web_fetch` | —                  | Search the web and fetch page content                                    |
+| `list-agents`   | `list_agents`             | `/agents`          | Discover and browse agent definitions                                    |
+| `commands`      | —                         | `/commands`        | List all registered slash commands                                       |
+| `session-costs` | —                         | `/session-costs`   | Show main-agent and subagent token and cost usage                        |
+
+### Session costs
+
+Run `/session-costs` to see token and cost totals for the current session. The report includes main-agent usage, direct subagent usage, nested subagent usage, and combined totals.
+
+The report uses Pi's billed-token rules. Prompt tokens are `input + cacheRead + cacheWrite`. Total tokens add `output`, and cost uses each recorded `cost.total` value. It scans all session entries, so its main totals match Pi's `/session` accounting. Pi's `/session` does not recurse into subagent details, and this command does not change `/session`.
+
+Older subagent records may not contain nested usage. `/session-costs` reports a warning when it cannot recover that usage instead of treating it as zero.
 
 ### Agents
 
@@ -147,7 +157,11 @@ tb-pi-package/
 │   ├── ask-user/        # ask_user questionnaire tool
 │   │   └── index.ts
 │   ├── commands.ts      # /commands slash command
+│   ├── lib/              # Shared extension helpers
+│   │   └── usage.ts      # Usage parsing and aggregation
 │   ├── list-agents.ts   # /agents command + list_agents tool
+│   ├── session-costs/   # /session-costs slash command
+│   │   └── index.ts
 │   ├── subagent/        # Agent tool (single/parallel/chain modes)
 │   │   ├── agents.ts    # Agent discovery & parsing
 │   │   ├── index.ts     # Subagent tool + TUI rendering
