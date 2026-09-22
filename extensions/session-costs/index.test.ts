@@ -135,16 +135,26 @@ describe("collectSessionUsage", () => {
         summary: "branch summary",
         usage: usage({ input: 5, output: 3, cacheRead: 4, cacheWrite: 1, cost: 0.4 }),
       },
+      {
+        type: "usage",
+        id: "cache-warm",
+        parentId: "branch",
+        timestamp: "2026-01-01T00:00:04.000Z",
+        kind: "cache_warm",
+        provider: "test-provider",
+        model: "test-model",
+        usage: usage({ input: 6, output: 1, cacheRead: 5, cacheWrite: 0, cost: 0.6 }),
+      },
     ] satisfies SessionEntry[];
 
     const report = collectSessionUsage(entries);
 
     expect(report.main).toEqual({
-      input: 25,
-      output: 10,
-      cacheRead: 7,
+      input: 31,
+      output: 11,
+      cacheRead: 12,
       cacheWrite: 4,
-      cost: 1.4,
+      cost: 2.0,
     });
     expect(report.subagents).toEqual({
       input: 0,

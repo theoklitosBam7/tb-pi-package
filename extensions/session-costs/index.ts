@@ -85,6 +85,11 @@ export function collectSessionUsage(entries: readonly SessionEntry[]): SessionUs
   };
 
   for (const entry of entries) {
+    if (entry.type === "usage") {
+      addMainUsage(entry.usage);
+      continue;
+    }
+
     if (entry.type === "compaction" || entry.type === "branch_summary") {
       addMainUsage(entry.usage);
       continue;
