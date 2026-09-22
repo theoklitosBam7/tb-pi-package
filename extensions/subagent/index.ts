@@ -27,6 +27,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { addUsageTotals, createUsageTotals, getPersistedSubagentUsage } from "../lib/usage.js";
 import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
 import {
   AgentInspectorComponent,
@@ -152,6 +153,15 @@ function formatUsageStats(
   return parts.join(" ");
 }
 
+function formatResultUsageStats(
+  result: Pick<SingleResult, "usage" | "descendantUsage">,
+  model?: string,
+): string {
+  const direct = formatUsageStats(result.usage, model);
+  const descendant = result.descendantUsage ? formatUsageStats(result.descendantUsage) : "";
+  return [direct, descendant ? `nested:${descendant}` : ""].filter(Boolean).join(" ");
+}
+
 function formatToolCall(
   toolName: string,
   args: Record<string, unknown>,
@@ -225,6 +235,7 @@ function formatToolCall(
 }
 
 interface SubagentDetails {
+  usageVersion: 2;
   mode: "single" | "parallel" | "chain";
   agentScope: AgentScope;
   projectAgentsDir: string | null;
@@ -472,6 +483,15 @@ async function runSingleAgent(
       }
     };
 
+    const captureNestedUsage = (message: Message): void => {
+      if (message.role !== "toolResult" || message.toolName !== "agent") return;
+      const nestedUsage = getPersistedSubagentUsage(message.details);
+      if (nestedUsage.recognized) {
+        currentResult.descendantUsage ??= createUsageTotals();
+        addUsageTotals(currentResult.descendantUsage, nestedUsage.totals);
+      }
+    };
+
     try {
       if (resolvedOptions.systemPrompt.trim()) {
         const tmp = await writePromptToTempFile(agent.name, resolvedOptions.systemPrompt);
@@ -543,6 +563,7 @@ async function runSingleAgent(
 
           if (event.type === "message_end" && event.message) {
             const msg = event.message as Message;
+            captureNestedUsage(msg);
             currentResult.messages.push(msg);
 
             if (msg.role === "assistant") {
@@ -564,11 +585,6 @@ async function runSingleAgent(
               if (msg.stopReason) currentResult.stopReason = msg.stopReason;
               if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
             }
-            emitUpdate();
-          }
-
-          if (event.type === "tool_result_end" && event.message) {
-            currentResult.messages.push(event.message as Message);
             emitUpdate();
           }
         };
@@ -627,6 +643,24 @@ async function runSingleAgent(
   };
 
   // Try models in order, falling back on model/API key errors
+  const previousUsage = createUsageTotals();
+  const previousDescendantUsage = createUsageTotals();
+  let previousTurns = 0;
+  const mergePreviousUsage = (result: SingleResult): SingleResult => {
+    addUsageTotals(result.usage, previousUsage);
+    result.usage.turns += previousTurns;
+    if (
+      previousDescendantUsage.input > 0 ||
+      previousDescendantUsage.output > 0 ||
+      previousDescendantUsage.cacheRead > 0 ||
+      previousDescendantUsage.cacheWrite > 0 ||
+      previousDescendantUsage.cost > 0
+    ) {
+      result.descendantUsage ??= createUsageTotals();
+      addUsageTotals(result.descendantUsage, previousDescendantUsage);
+    }
+    return result;
+  };
   let lastResult: SingleResult | undefined;
   try {
     for (let i = 0; i < modelsToTry.length; i++) {
@@ -636,20 +670,24 @@ async function runSingleAgent(
 
       if (runAbortController.signal.aborted) {
         markResultAborted(result);
-        return result;
+        return mergePreviousUsage(result);
       }
 
       // Success - return immediately
       if (isCompletedResult(result)) {
-        return result;
+        return mergePreviousUsage(result);
       }
 
       // Check if this is a model/API key error that warrants a fallback
       const shouldFallback = isModelOrApiKeyError(result.stderr) && i < modelsToTry.length - 1;
       if (!shouldFallback) {
         // No more fallbacks or error is not model-related
-        return result;
+        return mergePreviousUsage(result);
       }
+
+      addUsageTotals(previousUsage, result.usage);
+      previousTurns += result.usage.turns;
+      if (result.descendantUsage) addUsageTotals(previousDescendantUsage, result.descendantUsage);
 
       // Log fallback for debugging
       const nextModel = modelsToTry[i + 1];
@@ -657,7 +695,7 @@ async function runSingleAgent(
     }
 
     // Should not reach here, but return last result just in case
-    return lastResult!;
+    return lastResult ? mergePreviousUsage(lastResult) : lastResult!;
   } finally {
     signal?.removeEventListener("abort", forwardAbort);
     if (inspectorRun?.status() === "running") {
@@ -847,6 +885,7 @@ export default function (pi: ExtensionAPI) {
       const makeDetails =
         (mode: "single" | "parallel" | "chain") =>
         (results: SingleResult[]): SubagentDetails => ({
+          usageVersion: 2,
           mode,
           agentScope,
           projectAgentsDir: discovery.projectAgentsDir,
@@ -1371,7 +1410,7 @@ export default function (pi: ExtensionAPI) {
               container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
             }
           }
-          const usageStr = formatUsageStats(r.usage, r.model);
+          const usageStr = formatResultUsageStats(r, r.model);
           if (usageStr) {
             container.addChild(new Spacer(1));
             container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
@@ -1389,26 +1428,16 @@ export default function (pi: ExtensionAPI) {
           if (displayItems.length > COLLAPSED_ITEM_COUNT)
             text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
         }
-        const usageStr = formatUsageStats(r.usage, r.model);
+        const usageStr = formatResultUsageStats(r, r.model);
         if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
         return new Text(text, 0, 0);
       }
 
       const aggregateUsage = (results: SingleResult[]) => {
-        const total = {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          cost: 0,
-          turns: 0,
-        };
+        const total = { ...createUsageTotals(), turns: 0 };
         for (const r of results) {
-          total.input += r.usage.input;
-          total.output += r.usage.output;
-          total.cacheRead += r.usage.cacheRead;
-          total.cacheWrite += r.usage.cacheWrite;
-          total.cost += r.usage.cost;
+          addUsageTotals(total, r.usage);
+          if (r.descendantUsage) addUsageTotals(total, r.descendantUsage);
           total.turns += r.usage.turns;
         }
         return total;
@@ -1474,7 +1503,7 @@ export default function (pi: ExtensionAPI) {
               container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
             }
 
-            const stepUsage = formatUsageStats(r.usage, r.model);
+            const stepUsage = formatResultUsageStats(r, r.model);
             if (stepUsage) container.addChild(new Text(theme.fg("dim", stepUsage), 0, 0));
           }
 
@@ -1566,7 +1595,7 @@ export default function (pi: ExtensionAPI) {
               container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
             }
 
-            const taskUsage = formatUsageStats(r.usage, r.model);
+            const taskUsage = formatResultUsageStats(r, r.model);
             if (taskUsage) container.addChild(new Text(theme.fg("dim", taskUsage), 0, 0));
           }
 

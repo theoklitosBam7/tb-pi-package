@@ -1,9 +1,14 @@
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+
+import { spawn } from "node:child_process";
 import subagentExtension, { buildSubagentArgs } from "./index.js";
 import {
   buildArtifactPath,
@@ -469,6 +474,67 @@ describe("getResultOutput", () => {
 });
 
 describe("subagent rendering", () => {
+  it("includes descendant usage once in aggregate rendering", () => {
+    const tools: Record<string, any> = {};
+    subagentExtension({
+      on() {},
+      registerTool(tool: any) {
+        tools[tool.name] = tool;
+      },
+      registerCommand() {},
+      registerShortcut() {},
+    } as any);
+    const theme = {
+      bold: (text: string) => text,
+      fg: (_color: string, text: string) => text,
+    };
+    const rendered = tools.agent
+      .renderResult(
+        {
+          content: [{ type: "text", text: "Parallel: 1/1 tasks" }],
+          details: {
+            usageVersion: 2,
+            mode: "parallel",
+            agentScope: "user",
+            projectAgentsDir: null,
+            results: [
+              {
+                agent: "worker",
+                agentSource: "user",
+                task: "task",
+                exitCode: 0,
+                messages: [],
+                stderr: "",
+                usage: {
+                  input: 10,
+                  output: 2,
+                  cacheRead: 1,
+                  cacheWrite: 0,
+                  cost: 0.1,
+                  contextTokens: 12,
+                  turns: 1,
+                },
+                descendantUsage: {
+                  input: 4,
+                  output: 3,
+                  cacheRead: 2,
+                  cacheWrite: 1,
+                  cost: 0.2,
+                },
+              },
+            ],
+          },
+        },
+        { expanded: false, isPartial: false },
+        theme,
+        {},
+      )
+      .render(120)
+      .join("\n");
+
+    expect(rendered).toContain("Total: 1 turn ↑14 ↓5 R3 W1 $0.3000");
+  });
+
   it("uses status classification for concurrent results and keeps partial renders status-only", () => {
     const tools: Record<string, any> = {};
     subagentExtension({
@@ -540,6 +606,256 @@ describe("subagent rendering", () => {
     expect(rendered).toContain("1/2 done, 1 running");
     expect(rendered).toContain("completed-with-error-stop ✗");
     expect(rendered).toContain("still-running ⏳");
+  });
+});
+
+describe("nested usage persistence", () => {
+  it("captures nested agent usage before artifact persistence clears messages", async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-nested-test-"));
+    vi.stubEnv("PI_CODING_AGENT_DIR", project);
+    const agentsDir = path.join(project, ".pi", "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentsDir, "worker.md"),
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      kill: vi.fn(),
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+
+    const tools: Record<string, any> = {};
+    subagentExtension({
+      on() {},
+      registerTool(tool: any) {
+        tools[tool.name] = tool;
+      },
+      registerCommand() {},
+      registerShortcut() {},
+    } as any);
+
+    const execution = tools.agent.execute(
+      "call-parent",
+      {
+        agent: "worker",
+        task: "parent task",
+        agentScope: "project",
+        confirmProjectAgents: false,
+      },
+      undefined,
+      undefined,
+      {
+        cwd: project,
+        hasUI: false,
+        model: undefined,
+        sessionManager: {
+          getSessionFile: () => path.join(project, "session.jsonl"),
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+
+    const nestedDetails = {
+      usageVersion: 2,
+      mode: "single",
+      agentScope: "user",
+      projectAgentsDir: null,
+      results: [
+        {
+          agent: "nested-worker",
+          agentSource: "user",
+          task: "nested task",
+          exitCode: 0,
+          messages: [],
+          stderr: "",
+          usage: {
+            input: 3,
+            output: 2,
+            cacheRead: 1,
+            cacheWrite: 0,
+            cost: 0.2,
+            contextTokens: 6,
+            turns: 1,
+          },
+        },
+      ],
+    };
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "parent output" }],
+      api: "test-api",
+      provider: "test-provider",
+      model: "test-model",
+      usage: {
+        input: 10,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+        totalTokens: 17,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0.5,
+        },
+      },
+      stopReason: "stop",
+      timestamp: 0,
+    };
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ type: "message_end", message: assistantMessage })}\n`,
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        type: "message_end",
+        message: {
+          role: "toolResult",
+          toolCallId: "nested-call",
+          toolName: "agent",
+          content: [],
+          details: nestedDetails,
+          isError: false,
+          timestamp: 1,
+        },
+      })}\n`,
+    );
+    child.emit("close", 0, null);
+
+    const result = await execution;
+
+    expect(result.details?.results[0].descendantUsage).toEqual({
+      input: 3,
+      output: 2,
+      cacheRead: 1,
+      cacheWrite: 0,
+      cost: 0.2,
+    });
+    expect(result.details?.usageVersion).toBe(2);
+    expect(result.details?.results[0].messages).toEqual([]);
+    fs.rmSync(project, { recursive: true, force: true });
+    vi.mocked(spawn).mockReset();
+  });
+
+  it("retains usage from failed model attempts when a fallback succeeds", async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-fallback-test-"));
+    vi.stubEnv("PI_CODING_AGENT_DIR", project);
+    const agentsDir = path.join(project, ".pi", "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentsDir, "worker.md"),
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    const children: Array<ReturnType<typeof createChild>> = [];
+    function createChild() {
+      return Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+        kill: vi.fn(),
+      });
+    }
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createChild();
+      children.push(child);
+      return child as never;
+    });
+
+    const tools: Record<string, any> = {};
+    subagentExtension({
+      on() {},
+      registerTool(tool: any) {
+        tools[tool.name] = tool;
+      },
+      registerCommand() {},
+      registerShortcut() {},
+    } as any);
+    const execution = tools.agent.execute(
+      "call-fallback",
+      {
+        agent: "worker",
+        task: "fallback task",
+        model: "test/primary",
+        agentScope: "project",
+        confirmProjectAgents: false,
+      },
+      undefined,
+      undefined,
+      {
+        cwd: project,
+        hasUI: false,
+        model: undefined,
+        sessionManager: {
+          getSessionFile: () => path.join(project, "session.jsonl"),
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(children).toHaveLength(1));
+    const firstAttempt = {
+      role: "assistant",
+      content: [{ type: "text", text: "primary failed" }],
+      api: "test-api",
+      provider: "test-provider",
+      model: "test/primary",
+      usage: {
+        input: 5,
+        output: 1,
+        cacheRead: 2,
+        cacheWrite: 0,
+        totalTokens: 8,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+      },
+      stopReason: "error",
+      errorMessage: "primary failed",
+      timestamp: 0,
+    };
+    children[0].stdout.emit(
+      "data",
+      `${JSON.stringify({ type: "message_end", message: firstAttempt })}\n`,
+    );
+    children[0].stderr.emit("data", "No API key\n");
+    children[0].emit("close", 1, null);
+
+    await vi.waitFor(() => expect(children).toHaveLength(2));
+    const fallbackAttempt = {
+      ...firstAttempt,
+      content: [{ type: "text", text: "fallback succeeded" }],
+      model: "test/fallback",
+      usage: {
+        input: 7,
+        output: 3,
+        cacheRead: 1,
+        cacheWrite: 2,
+        totalTokens: 13,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.2 },
+      },
+      stopReason: "stop",
+      errorMessage: undefined,
+    };
+    children[1].stdout.emit(
+      "data",
+      `${JSON.stringify({ type: "message_end", message: fallbackAttempt })}\n`,
+    );
+    children[1].emit("close", 0, null);
+
+    const result = await execution;
+
+    expect(result.details?.results[0].usage).toMatchObject({
+      input: 12,
+      output: 4,
+      cacheRead: 3,
+      cacheWrite: 2,
+      turns: 2,
+    });
+    expect(result.details?.results[0].usage.cost).toBeCloseTo(0.3);
+    expect(result.details?.results[0].model).toBe("test/fallback");
+    fs.rmSync(project, { recursive: true, force: true });
+    vi.mocked(spawn).mockReset();
   });
 });
 
