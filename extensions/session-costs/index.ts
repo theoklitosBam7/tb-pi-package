@@ -7,7 +7,7 @@ import {
   addUsageTotals,
   createUsageTotals,
   getPersistedSubagentUsage,
-  parseUsageTotals,
+  parsePiUsage,
   type UsageTotals,
 } from "../lib/usage.js";
 
@@ -81,14 +81,14 @@ export function collectSessionUsage(entries: readonly SessionEntry[]): SessionUs
 
   for (const entry of entries) {
     if (entry.type === "compaction" || entry.type === "branch_summary") {
-      const usage = parseUsageTotals(entry.usage, "pi");
+      const usage = parsePiUsage(entry.usage);
       if (usage) addUsageTotals(report.main, usage);
       continue;
     }
 
     if (entry.type !== "message") continue;
     if (entry.message.role === "assistant") {
-      const usage = parseUsageTotals(entry.message.usage, "pi");
+      const usage = parsePiUsage(entry.message.usage);
       if (usage) addUsageTotals(report.main, usage);
     } else if (entry.message.role === "toolResult") {
       if (entry.message.toolName === "agent") {
@@ -97,14 +97,14 @@ export function collectSessionUsage(entries: readonly SessionEntry[]): SessionUs
           addUsageTotals(report.subagents, subagentUsage.totals);
           report.subagentRuns += subagentUsage.runs;
         } else {
-          const usage = parseUsageTotals(entry.message.usage, "pi");
+          const usage = parsePiUsage(entry.message.usage);
           if (usage) addUsageTotals(report.main, usage);
         }
         for (const warning of subagentUsage.warnings) {
           if (!report.warnings.includes(warning)) report.warnings.push(warning);
         }
       } else {
-        const usage = parseUsageTotals(entry.message.usage, "pi");
+        const usage = parsePiUsage(entry.message.usage);
         if (usage) addUsageTotals(report.main, usage);
       }
     }

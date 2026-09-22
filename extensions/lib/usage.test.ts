@@ -3,29 +3,27 @@ import {
   addUsageTotals,
   createUsageTotals,
   getPersistedSubagentUsage,
-  parseUsageTotals,
+  parsePiUsage,
+  parseSubagentUsage,
 } from "./usage.js";
 
 describe("usage totals", () => {
   it("parses and adds billed Pi usage without changing the raw buckets", () => {
     const target = createUsageTotals();
-    const usage = parseUsageTotals(
-      {
-        input: 100,
-        output: 25,
-        cacheRead: 40,
-        cacheWrite: 5,
-        totalTokens: 170,
-        cost: {
-          input: 0.01,
-          output: 0.02,
-          cacheRead: 0.003,
-          cacheWrite: 0.001,
-          total: 0.034,
-        },
+    const usage = parsePiUsage({
+      input: 100,
+      output: 25,
+      cacheRead: 40,
+      cacheWrite: 5,
+      totalTokens: 170,
+      cost: {
+        input: 0.01,
+        output: 0.02,
+        cacheRead: 0.003,
+        cacheWrite: 0.001,
+        total: 0.034,
       },
-      "pi",
-    );
+    });
 
     expect(usage).toEqual({
       input: 100,
@@ -40,10 +38,7 @@ describe("usage totals", () => {
 
   it("parses subagent usage with a numeric cost and missing legacy cache fields", () => {
     expect(
-      parseUsageTotals(
-        { input: 12, output: 8, cost: 0.25, contextTokens: 20, turns: 1 },
-        "subagent",
-      ),
+      parseSubagentUsage({ input: 12, output: 8, cost: 0.25, contextTokens: 20, turns: 1 }),
     ).toEqual({
       input: 12,
       output: 8,
@@ -54,10 +49,10 @@ describe("usage totals", () => {
   });
 
   it("rejects malformed usage without throwing", () => {
-    expect(() => parseUsageTotals({ input: "12" }, "subagent")).not.toThrow();
-    expect(parseUsageTotals({ input: "12" }, "subagent")).toBeUndefined();
-    expect(parseUsageTotals({ input: -1, output: 0, cost: 0 }, "subagent")).toBeUndefined();
-    expect(parseUsageTotals(null, "pi")).toBeUndefined();
+    expect(() => parseSubagentUsage({ input: "12" })).not.toThrow();
+    expect(parseSubagentUsage({ input: "12" })).toBeUndefined();
+    expect(parseSubagentUsage({ input: -1, output: 0, cost: 0 })).toBeUndefined();
+    expect(parsePiUsage(null)).toBeUndefined();
   });
 
   it("sums direct and descendant usage from a valid v2 subagent record", () => {

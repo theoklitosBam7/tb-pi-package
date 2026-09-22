@@ -77,22 +77,19 @@ export function addUsageTotals(target: UsageTotals, source: UsageTotals): void {
   target.cost += source.cost;
 }
 
-export function parseUsageTotals(
-  value: unknown,
-  sourceKind: "pi" | "subagent",
-): UsageTotals | undefined {
-  if (sourceKind === "pi") {
-    if (!Value.Check(PiUsageSchema, value)) return undefined;
-    const usage: PiUsage = value;
-    return {
-      input: usage.input,
-      output: usage.output,
-      cacheRead: usage.cacheRead ?? 0,
-      cacheWrite: usage.cacheWrite ?? 0,
-      cost: usage.cost.total,
-    };
-  }
+export function parsePiUsage(value: unknown): UsageTotals | undefined {
+  if (!Value.Check(PiUsageSchema, value)) return undefined;
+  const usage: PiUsage = value;
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead ?? 0,
+    cacheWrite: usage.cacheWrite ?? 0,
+    cost: usage.cost.total,
+  };
+}
 
+export function parseSubagentUsage(value: unknown): UsageTotals | undefined {
   if (!Value.Check(SubagentUsageSchema, value)) return undefined;
   const usage: SubagentUsage = value;
   return {
@@ -117,9 +114,9 @@ export function getPersistedSubagentUsage(details: unknown): PersistedSubagentUs
   const persisted: PersistedSubagentDetails = details;
   const totals = createUsageTotals();
   for (const result of persisted.results) {
-    const directUsage = parseUsageTotals(result.usage, "subagent");
+    const directUsage = parseSubagentUsage(result.usage);
     if (directUsage) addUsageTotals(totals, directUsage);
-    const descendantUsage = parseUsageTotals(result.descendantUsage, "subagent");
+    const descendantUsage = parseSubagentUsage(result.descendantUsage);
     if (descendantUsage) addUsageTotals(totals, descendantUsage);
   }
 
