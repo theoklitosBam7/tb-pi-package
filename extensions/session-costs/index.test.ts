@@ -1,5 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { Usage } from "@earendil-works/pi-ai";
+import type { JsonValue, Usage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -40,7 +40,7 @@ const subagentResult = (values: {
   agentSource: "user",
   task: "task",
   exitCode: values.exitCode ?? 0,
-  stopReason: values.stopReason,
+  ...(values.stopReason === undefined ? {} : { stopReason: values.stopReason }),
   messages: [],
   stderr: "",
   usage: {
@@ -57,7 +57,7 @@ const subagentResult = (values: {
 const subagentEntry = (
   id: string,
   mode: "single" | "parallel" | "chain",
-  results: unknown,
+  results: JsonValue,
   topLevelUsage?: Usage,
 ): SessionEntry => ({
   type: "message",
