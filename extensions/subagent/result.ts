@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { UsageTotals, UsageTotalsWithTurns } from "../lib/usage.js";
-import type { SubagentThinkingLevel } from "./overrides.js";
+import type { SubagentThinkingLevel } from "./agents.js";
 
 interface AbortableProcess {
   kill(signal: NodeJS.Signals): boolean;

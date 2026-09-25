@@ -639,6 +639,133 @@ function registerPersistenceTestTools(): Record<string, any> {
   return tools;
 }
 
+describe("subagent execution options", () => {
+  it("passes settings thinking and tools to the child process", async () => {
+    const project = createPersistenceTestProject(
+      "options-test-",
+      "---\nname: worker\ndescription: Test worker\nthinking: high\ntools: read, rg\n---\n",
+    );
+    fs.writeFileSync(
+      path.join(project, "settings.json"),
+      JSON.stringify({
+        subagents: {
+          agentOverrides: {
+            worker: { thinking: "medium", tools: ["write", "edit"] },
+          },
+        },
+      }),
+    );
+    const child = createPersistenceTestChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+
+    const execution = tools.agent.execute(
+      "call-options",
+      {
+        agent: "worker",
+        task: "check resolved options",
+        agentScope: "project",
+        confirmProjectAgents: false,
+      },
+      undefined,
+      undefined,
+      {
+        cwd: project,
+        hasUI: false,
+        model: undefined,
+        sessionManager: {
+          getSessionFile: () => path.join(project, "session.jsonl"),
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+    const invocation = vi.mocked(spawn).mock.calls[0];
+    const args = invocation?.[1] ?? [];
+    child.emit("close", 0, null);
+    await execution;
+
+    expect(args).toEqual(expect.arrayContaining(["--thinking", "medium", "--tools", "write,edit"]));
+    expect(args).not.toContain("read,rg");
+    fs.rmSync(project, { recursive: true, force: true });
+    vi.mocked(spawn).mockReset();
+  });
+
+  it("rejects an agent with invalid thinking frontmatter before spawning", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-thinking-",
+      "---\nname: worker\ndescription: Test worker\nthinking: HIGH\n---\n",
+    );
+    const tools = registerPersistenceTestTools();
+
+    const result = await tools.agent.execute(
+      "call-invalid-thinking",
+      {
+        agent: "worker",
+        task: "should not run",
+        agentScope: "project",
+        confirmProjectAgents: false,
+      },
+      undefined,
+      undefined,
+      {
+        cwd: project,
+        hasUI: false,
+        model: undefined,
+        sessionManager: {
+          getSessionFile: () => path.join(project, "session.jsonl"),
+        },
+      },
+    );
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(result.details?.results[0].stderr).toContain("thinking must be one of");
+    fs.rmSync(project, { recursive: true, force: true });
+    vi.mocked(spawn).mockReset();
+  });
+
+  it("reports frontmatter and settings errors before spawning", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-agent-config-",
+      "---\nname: worker\ndescription: Test worker\nthinking: HIGH\n---\n",
+    );
+    fs.writeFileSync(
+      path.join(project, "settings.json"),
+      JSON.stringify({ subagents: { agentOverrides: { worker: { tools: [] } } } }),
+    );
+    const tools = registerPersistenceTestTools();
+
+    const result = await tools.agent.execute(
+      "call-invalid-agent-config",
+      {
+        agent: "worker",
+        task: "should not run",
+        agentScope: "project",
+        confirmProjectAgents: false,
+      },
+      undefined,
+      undefined,
+      {
+        cwd: project,
+        hasUI: false,
+        model: undefined,
+        sessionManager: {
+          getSessionFile: () => path.join(project, "session.jsonl"),
+        },
+      },
+    );
+
+    const error = result.details?.results[0].stderr ?? "";
+    expect(spawn).not.toHaveBeenCalled();
+    expect(error).toContain("thinking must be one of");
+    expect(error).toContain("worker.tools must be a non-empty array");
+    expect(error).toContain("; ");
+    fs.rmSync(project, { recursive: true, force: true });
+    vi.mocked(spawn).mockReset();
+  });
+});
+
 describe("nested usage persistence", () => {
   it("captures nested agent and tool-result usage before artifact persistence clears messages", async () => {
     const project = createPersistenceTestProject(

@@ -37,7 +37,13 @@ import {
   parsePiUsage,
   type PersistedSubagentDetails,
 } from "../lib/usage.js";
-import { type AgentConfig, type AgentScope, discoverAgents, formatAgentList } from "./agents.js";
+import {
+  type AgentConfig,
+  type AgentScope,
+  type SubagentThinkingLevel,
+  discoverAgents,
+  formatAgentList,
+} from "./agents.js";
 import {
   AgentInspectorComponent,
   AgentInspectorStore,
@@ -46,7 +52,7 @@ import {
 } from "./inspector.js";
 import {
   type AgentOverridesSnapshot,
-  type SubagentThinkingLevel,
+  getAgentConfigurationError,
   getAgentOverride,
   loadAgentOverrides,
   resolveAgentOptions,
@@ -414,14 +420,15 @@ async function runSingleAgent(
   const agent = resolution.agent!;
   const resolvedName = resolution.resolvedName!;
   const overrideEntry = getAgentOverride(overrides, resolvedName);
-  if (overrideEntry?.kind === "invalid") {
+  const configError = getAgentConfigurationError(agent, overrideEntry);
+  if (configError !== undefined) {
     return {
       agent: resolvedName,
       agentSource: agent.source,
       task,
       exitCode: 1,
       messages: [],
-      stderr: overrideEntry.error,
+      stderr: configError,
       usage: {
         input: 0,
         output: 0,
@@ -518,7 +525,7 @@ async function runSingleAgent(
       const args = buildSubagentArgs({
         model,
         thinking: resolvedOptions.thinking,
-        tools: agent.tools,
+        tools: resolvedOptions.tools,
         promptPath: tmpPromptPath ?? undefined,
         task,
       });

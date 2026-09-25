@@ -13,11 +13,11 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { discoverAgents, type AgentConfig } from "./subagent/agents.js";
+import { discoverAgents, type AgentConfig, type SubagentThinkingLevel } from "./subagent/agents.js";
 import {
   type AgentOverrideEntry,
   type EffectiveModelSource,
-  type SubagentThinkingLevel,
+  getAgentConfigurationError,
   getAgentOverride,
   loadAgentOverrides,
   resolveAgentOptions,
@@ -34,6 +34,7 @@ export interface AgentDefinition {
   effectiveModel?: string;
   effectiveModelSource: EffectiveModelSource;
   thinking?: SubagentThinkingLevel;
+  thinkingSource?: "settings" | "frontmatter";
   systemPromptOverridden: boolean;
   configError?: string;
   subagentType?: string;
@@ -52,16 +53,18 @@ export function createAgentDefinition(
 ): AgentDefinition {
   const override = overrideEntry?.kind === "valid" ? overrideEntry.value : undefined;
   const resolved = resolveAgentOptions(agent, override, { parentModel });
+  const configError = getAgentConfigurationError(agent, overrideEntry);
   return {
     name: agent.name,
     description: agent.description,
-    tools: agent.tools,
+    tools: resolved.tools,
     model: agent.model,
     effectiveModel: resolved.effectiveModel,
     effectiveModelSource: resolved.effectiveModelSource,
     thinking: resolved.thinking,
+    thinkingSource: resolved.thinkingSource,
     systemPromptOverridden: resolved.systemPromptOverridden,
-    configError: overrideEntry?.kind === "invalid" ? overrideEntry.error : undefined,
+    configError,
     subagentType: agent.subagentType,
     path: agent.filePath,
     content: agent.systemPrompt,
@@ -99,12 +102,12 @@ function formatAgent(agent: AgentDefinition): string {
     lines.push(`\n**Type:** ${agent.subagentType}`);
   }
 
-  if (agent.tools && agent.tools.length > 0) {
-    lines.push(`\n**Tools:** ${agent.tools.join(", ")}`);
-  }
+  lines.push(`\n**Tools:** ${agent.tools?.join(", ") ?? "Pi default"}`);
 
   lines.push(`**Model:** ${agent.effectiveModel ?? "Pi default"} (${agent.effectiveModelSource})`);
-  lines.push(`**Thinking:** ${agent.thinking ? `${agent.thinking} (settings)` : "Pi default"}`);
+  lines.push(
+    `**Thinking:** ${agent.thinking ? `${agent.thinking} (${agent.thinkingSource})` : "Pi default"}`,
+  );
   if (agent.systemPromptOverridden) {
     lines.push("**System prompt:** overridden by settings");
   }
@@ -125,8 +128,9 @@ function formatAgentItem(agent: AgentDefinition): string {
   const desc = agent.description
     ? ` - ${agent.description.slice(0, 50)}${agent.description.length > 50 ? "..." : ""}`
     : "";
-  const tools = agent.tools ? ` [${agent.tools.length} tools]` : "";
-  return `${agent.name}${tools}${desc}`;
+  const tools = agent.tools ? ` [${agent.tools.length} tools]` : " [Pi default tools]";
+  const configError = agent.configError ? ` [configuration error: ${agent.configError}]` : "";
+  return `${agent.name}${tools}${configError}${desc}`;
 }
 
 /**
@@ -168,13 +172,13 @@ function formatAgentEntry(lines: string[], agent: AgentDefinition): void {
   if (agent.subagentType) {
     lines.push(`- **Type:** ${agent.subagentType}`);
   }
-  if (agent.tools && agent.tools.length > 0) {
-    lines.push(`- **Tools:** ${agent.tools.join(", ")}`);
-  }
+  lines.push(`- **Tools:** ${agent.tools?.join(", ") ?? "Pi default"}`);
   lines.push(
     `- **Model:** ${agent.effectiveModel ?? "Pi default"} (${agent.effectiveModelSource})`,
   );
-  lines.push(`- **Thinking:** ${agent.thinking ? `${agent.thinking} (settings)` : "Pi default"}`);
+  lines.push(
+    `- **Thinking:** ${agent.thinking ? `${agent.thinking} (${agent.thinkingSource})` : "Pi default"}`,
+  );
   if (agent.systemPromptOverridden) {
     lines.push("- **System prompt:** overridden by settings");
   }

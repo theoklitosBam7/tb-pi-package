@@ -1,13 +1,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig } from "./agents.js";
+import {
+  parseSubagentThinkingLevel,
+  type AgentConfig,
+  type SubagentThinkingLevel,
+} from "./agents.js";
 
-export type SubagentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+type NonEmptyToolList = [string, ...string[]];
 
 export interface AgentOverride {
   model?: string;
   thinking?: SubagentThinkingLevel;
+  tools?: NonEmptyToolList;
   systemPrompt?: string;
 }
 
@@ -24,22 +29,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseThinkingLevel(value: unknown): SubagentThinkingLevel | undefined {
-  switch (value) {
-    case "off":
-    case "minimal":
-    case "low":
-    case "medium":
-    case "high":
-    case "xhigh":
-    case "max":
-      return value;
-    default:
-      return undefined;
-  }
+function isNonEmptyToolList(value: unknown): value is NonEmptyToolList {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (tool: unknown) =>
+        typeof tool === "string" && tool.length > 0 && tool.trim() === tool && !tool.includes(","),
+    )
+  );
 }
 
-const AGENT_OVERRIDE_FIELDS = new Set(["model", "thinking", "systemPrompt"]);
+const AGENT_OVERRIDE_FIELDS = new Set(["model", "thinking", "tools", "systemPrompt"]);
 
 function parseAgentOverride(
   settingsPath: string,
@@ -78,7 +79,7 @@ function parseAgentOverride(
   }
 
   if (value.thinking !== undefined) {
-    const thinking = parseThinkingLevel(value.thinking);
+    const thinking = parseSubagentThinkingLevel(value.thinking);
     if (thinking === undefined) {
       return {
         kind: "invalid",
@@ -86,6 +87,16 @@ function parseAgentOverride(
       };
     }
     override.thinking = thinking;
+  }
+
+  if (value.tools !== undefined) {
+    if (!isNonEmptyToolList(value.tools)) {
+      return {
+        kind: "invalid",
+        error: `${settingsPath}: ${fieldPath}.tools must be a non-empty array of tool names without commas or surrounding whitespace.`,
+      };
+    }
+    override.tools = value.tools;
   }
 
   if (value.systemPrompt !== undefined) {
@@ -158,6 +169,17 @@ export function getAgentOverride(
   return snapshot.entries.get(agentName);
 }
 
+export function getAgentConfigurationError(
+  agent: AgentConfig,
+  overrideEntry: AgentOverrideEntry | undefined,
+): string | undefined {
+  const errors = [
+    agent.configError,
+    overrideEntry?.kind === "invalid" ? overrideEntry.error : undefined,
+  ].filter((error): error is string => error !== undefined);
+  return errors.length > 0 ? errors.join("; ") : undefined;
+}
+
 export type EffectiveModelSource = "tool" | "settings" | "frontmatter" | "parent" | "default";
 
 export interface ResolvedAgentOptions {
@@ -165,6 +187,8 @@ export interface ResolvedAgentOptions {
   effectiveModel?: string;
   effectiveModelSource: EffectiveModelSource;
   thinking?: SubagentThinkingLevel;
+  thinkingSource?: "settings" | "frontmatter";
+  tools?: string[];
   systemPrompt: string;
   systemPromptOverridden: boolean;
 }
@@ -195,11 +219,20 @@ export function resolveAgentOptions(
   if (modelsToTry.length === 0) modelsToTry.push(undefined);
 
   const systemPromptOverridden = override?.systemPrompt !== undefined;
+  const thinking = override?.thinking ?? agent.thinking;
+  const thinkingSource =
+    override?.thinking !== undefined
+      ? "settings"
+      : agent.thinking !== undefined
+        ? "frontmatter"
+        : undefined;
   return {
     modelsToTry,
     effectiveModel,
     effectiveModelSource,
-    thinking: override?.thinking,
+    thinking,
+    thinkingSource,
+    tools: override?.tools ?? agent.tools,
     systemPrompt: systemPromptOverridden ? override.systemPrompt : agent.systemPrompt,
     systemPromptOverridden,
   };

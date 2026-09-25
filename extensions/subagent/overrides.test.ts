@@ -33,6 +33,7 @@ describe("loadAgentOverrides", () => {
           researcher: {
             model: "openai-codex/gpt-5.6-luna",
             thinking: "medium",
+            tools: ["read", "rg"],
             systemPrompt: "Use primary sources.",
           },
         },
@@ -46,10 +47,26 @@ describe("loadAgentOverrides", () => {
       value: {
         model: "openai-codex/gpt-5.6-luna",
         thinking: "medium",
+        tools: ["read", "rg"],
         systemPrompt: "Use primary sources.",
       },
     });
   });
+
+  it.each([[], "read", ["read", " "], ["read", 2], ["read,write"]])(
+    "rejects invalid tools lists (%j)",
+    (tools) => {
+      const agentDir = createAgentDir({
+        subagents: { agentOverrides: { reviewer: { tools } } },
+      });
+      const settingsPath = path.join(agentDir, "settings.json");
+
+      expect(getAgentOverride(loadAgentOverrides({ agentDir }), "reviewer")).toEqual({
+        kind: "invalid",
+        error: `${settingsPath}: subagents.agentOverrides.reviewer.tools must be a non-empty array of tool names without commas or surrounding whitespace.`,
+      });
+    },
+  );
 
   it("isolates an unknown field error to its named agent", () => {
     const agentDir = createAgentDir({
@@ -214,6 +231,8 @@ const reviewerAgent: AgentConfig = {
   name: "reviewer",
   description: "Reviews changes",
   model: "frontmatter/model",
+  thinking: "low",
+  tools: ["read", "rg"],
   systemPrompt: "Markdown prompt",
   source: "user",
   filePath: "/agents/reviewer.md",
@@ -224,7 +243,12 @@ describe("resolveAgentOptions", () => {
     expect(
       resolveAgentOptions(
         reviewerAgent,
-        { model: "settings/model", thinking: "xhigh", systemPrompt: "" },
+        {
+          model: "settings/model",
+          thinking: "xhigh",
+          tools: ["write"],
+          systemPrompt: "",
+        },
         { modelOverride: "tool/model", parentModel: "parent/model" },
       ),
     ).toEqual({
@@ -232,8 +256,18 @@ describe("resolveAgentOptions", () => {
       effectiveModel: "tool/model",
       effectiveModelSource: "tool",
       thinking: "xhigh",
+      thinkingSource: "settings",
+      tools: ["write"],
       systemPrompt: "",
       systemPromptOverridden: true,
+    });
+  });
+
+  it("uses frontmatter thinking and tools when settings do not override them", () => {
+    expect(resolveAgentOptions(reviewerAgent, undefined)).toMatchObject({
+      thinking: "low",
+      thinkingSource: "frontmatter",
+      tools: ["read", "rg"],
     });
   });
 });

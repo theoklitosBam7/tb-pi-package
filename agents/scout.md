@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Maps an unfamiliar repository area by locating relevant files, symbols, call paths, dependencies, and tests. Use when missing repository facts will change planning or delegation.
-model: openai-codex/gpt-5.6-luna
+model: openai-codex/gpt-6-luna
 tools: read, rg, fd, ls, bash
 subagent_type: exploration
 ---
