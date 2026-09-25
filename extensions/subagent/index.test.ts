@@ -724,6 +724,46 @@ describe("subagent execution options", () => {
     fs.rmSync(project, { recursive: true, force: true });
     vi.mocked(spawn).mockReset();
   });
+
+  it("reports frontmatter and settings errors before spawning", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-agent-config-",
+      "---\nname: worker\ndescription: Test worker\nthinking: HIGH\n---\n",
+    );
+    fs.writeFileSync(
+      path.join(project, "settings.json"),
+      JSON.stringify({ subagents: { agentOverrides: { worker: { tools: [] } } } }),
+    );
+    const tools = registerPersistenceTestTools();
+
+    const result = await tools.agent.execute(
+      "call-invalid-agent-config",
+      {
+        agent: "worker",
+        task: "should not run",
+        agentScope: "project",
+        confirmProjectAgents: false,
+      },
+      undefined,
+      undefined,
+      {
+        cwd: project,
+        hasUI: false,
+        model: undefined,
+        sessionManager: {
+          getSessionFile: () => path.join(project, "session.jsonl"),
+        },
+      },
+    );
+
+    const error = result.details?.results[0].stderr ?? "";
+    expect(spawn).not.toHaveBeenCalled();
+    expect(error).toContain("thinking must be one of");
+    expect(error).toContain("worker.tools must be a non-empty array");
+    expect(error).toContain("; ");
+    fs.rmSync(project, { recursive: true, force: true });
+    vi.mocked(spawn).mockReset();
+  });
 });
 
 describe("nested usage persistence", () => {

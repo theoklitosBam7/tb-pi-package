@@ -52,6 +52,7 @@ import {
 } from "./inspector.js";
 import {
   type AgentOverridesSnapshot,
+  getAgentConfigurationError,
   getAgentOverride,
   loadAgentOverrides,
   resolveAgentOptions,
@@ -419,18 +420,15 @@ async function runSingleAgent(
   const agent = resolution.agent!;
   const resolvedName = resolution.resolvedName!;
   const overrideEntry = getAgentOverride(overrides, resolvedName);
-  const configErrors = [
-    agent.configError,
-    overrideEntry?.kind === "invalid" ? overrideEntry.error : undefined,
-  ].filter((error): error is string => error !== undefined);
-  if (configErrors.length > 0) {
+  const configError = getAgentConfigurationError(agent, overrideEntry);
+  if (configError !== undefined) {
     return {
       agent: resolvedName,
       agentSource: agent.source,
       task,
       exitCode: 1,
       messages: [],
-      stderr: configErrors.join("; "),
+      stderr: configError,
       usage: {
         input: 0,
         output: 0,

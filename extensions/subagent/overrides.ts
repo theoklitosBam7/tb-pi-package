@@ -169,6 +169,17 @@ export function getAgentOverride(
   return snapshot.entries.get(agentName);
 }
 
+export function getAgentConfigurationError(
+  agent: AgentConfig,
+  overrideEntry: AgentOverrideEntry | undefined,
+): string | undefined {
+  const errors = [
+    agent.configError,
+    overrideEntry?.kind === "invalid" ? overrideEntry.error : undefined,
+  ].filter((error): error is string => error !== undefined);
+  return errors.length > 0 ? errors.join("; ") : undefined;
+}
+
 export type EffectiveModelSource = "tool" | "settings" | "frontmatter" | "parent" | "default";
 
 export interface ResolvedAgentOptions {

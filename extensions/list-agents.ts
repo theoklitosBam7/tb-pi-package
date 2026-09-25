@@ -17,6 +17,7 @@ import { discoverAgents, type AgentConfig, type SubagentThinkingLevel } from "./
 import {
   type AgentOverrideEntry,
   type EffectiveModelSource,
+  getAgentConfigurationError,
   getAgentOverride,
   loadAgentOverrides,
   resolveAgentOptions,
@@ -52,10 +53,7 @@ export function createAgentDefinition(
 ): AgentDefinition {
   const override = overrideEntry?.kind === "valid" ? overrideEntry.value : undefined;
   const resolved = resolveAgentOptions(agent, override, { parentModel });
-  const configErrors = [
-    agent.configError,
-    overrideEntry?.kind === "invalid" ? overrideEntry.error : undefined,
-  ].filter((error): error is string => error !== undefined);
+  const configError = getAgentConfigurationError(agent, overrideEntry);
   return {
     name: agent.name,
     description: agent.description,
@@ -66,7 +64,7 @@ export function createAgentDefinition(
     thinking: resolved.thinking,
     thinkingSource: resolved.thinkingSource,
     systemPromptOverridden: resolved.systemPromptOverridden,
-    configError: configErrors.length > 0 ? configErrors.join("; ") : undefined,
+    configError,
     subagentType: agent.subagentType,
     path: agent.filePath,
     content: agent.systemPrompt,
@@ -131,7 +129,8 @@ function formatAgentItem(agent: AgentDefinition): string {
     ? ` - ${agent.description.slice(0, 50)}${agent.description.length > 50 ? "..." : ""}`
     : "";
   const tools = agent.tools ? ` [${agent.tools.length} tools]` : " [Pi default tools]";
-  return `${agent.name}${tools}${desc}`;
+  const configError = agent.configError ? ` [configuration error: ${agent.configError}]` : "";
+  return `${agent.name}${tools}${configError}${desc}`;
 }
 
 /**
