@@ -7,12 +7,30 @@ import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
+export type SubagentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export function parseSubagentThinkingLevel(value: unknown): SubagentThinkingLevel | undefined {
+  switch (value) {
+    case "off":
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return value;
+    default:
+      return undefined;
+  }
+}
 
 export interface AgentConfig {
   name: string;
   description: string;
   tools?: string[];
   model?: string;
+  thinking?: SubagentThinkingLevel;
+  configError?: string;
   subagentType?: string;
   systemPrompt: string;
   source: "user" | "project";
@@ -67,12 +85,19 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
       ?.split(",")
       .map((t: string) => t.trim())
       .filter(Boolean);
+    const thinking = parseSubagentThinkingLevel(frontmatter.thinking);
+    const configError =
+      frontmatter.thinking !== undefined && thinking === undefined
+        ? `${fullPath}: thinking must be one of off, minimal, low, medium, high, xhigh, max.`
+        : undefined;
 
     agents.push({
       name: frontmatter.name,
       description: frontmatter.description,
       tools: tools && tools.length > 0 ? tools : undefined,
       model: frontmatter.model,
+      thinking,
+      configError,
       subagentType: frontmatter.subagent_type,
       systemPrompt: body,
       source,

@@ -21,6 +21,7 @@ describe("agent override listing", () => {
       value: {
         model: "settings/model",
         thinking: "high",
+        tools: ["write"],
         systemPrompt: "PRIVATE OVERRIDE PROMPT",
       },
     };
@@ -33,14 +34,45 @@ describe("agent override listing", () => {
       effectiveModel: "settings/model",
       effectiveModelSource: "settings",
       thinking: "high",
+      thinkingSource: "settings",
+      tools: ["write"],
       systemPromptOverridden: true,
       content: "Markdown agent prompt",
     });
     expect(text).toContain("**Model:** settings/model (settings)");
+    expect(text).toContain("**Tools:** write");
     expect(text).toContain("**Thinking:** high (settings)");
     expect(text).toContain("**System prompt:** overridden by settings");
     expect(JSON.stringify(definition)).not.toContain("PRIVATE OVERRIDE PROMPT");
     expect(text).not.toContain("PRIVATE OVERRIDE PROMPT");
+  });
+
+  it("shows frontmatter thinking with its source", () => {
+    const frontmatterReviewer: AgentConfig = { ...reviewer, thinking: "low" };
+    const definition = createAgentDefinition(frontmatterReviewer, undefined, "parent/model");
+    const text = buildAgentListResponse([definition]);
+
+    expect(definition).toMatchObject({ thinking: "low", thinkingSource: "frontmatter" });
+    expect(text).toContain("**Thinking:** low (frontmatter)");
+  });
+
+  it("shows Pi default tools when the agent has no tools list", () => {
+    const agentWithoutTools: AgentConfig = { ...reviewer, tools: undefined };
+    const definition = createAgentDefinition(agentWithoutTools, undefined, "parent/model");
+    const text = buildAgentListResponse([definition]);
+
+    expect(definition.tools).toBeUndefined();
+    expect(text).toContain("- **Tools:** Pi default");
+  });
+
+  it("shows an agent frontmatter configuration error", () => {
+    const configError = "/agents/reviewer.md: thinking must use a supported level.";
+    const invalidReviewer = { ...reviewer, configError };
+    const definition = createAgentDefinition(invalidReviewer, undefined, "parent/model");
+    const text = buildAgentListResponse([definition]);
+
+    expect(definition.configError).toBe(configError);
+    expect(text).toContain(`**Configuration error:** ${configError}`);
   });
 
   it("keeps valid agents visible when another agent has an invalid override", () => {

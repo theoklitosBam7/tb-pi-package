@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: Independently reviews a code diff, plan, proposed solution, issue fix, or bounded codebase area. Use when risk, size, ambiguity, security, cross-cutting behavior, or an explicit request justifies separate review.
-model: openai-codex/gpt-5.6-luna
+model: openai-codex/gpt-6-luna
 tools: read, rg, fd, ls, bash
 subagent_type: review
 ---
