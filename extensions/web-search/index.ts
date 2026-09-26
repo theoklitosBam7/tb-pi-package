@@ -122,7 +122,7 @@ export default function (pi: ExtensionAPI) {
 
 function textResult<TDetails = unknown>(
   text: string,
-  details?: TDetails,
+  details: TDetails,
 ): AgentToolResult<TDetails> {
   return {
     content: [{ type: "text", text }],

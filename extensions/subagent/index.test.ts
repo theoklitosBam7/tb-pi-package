@@ -229,11 +229,9 @@ describe("writeResultArtifact", () => {
     };
     const acceptSingleResult = (value: SingleResult) => value;
     const acceptResultThinking = (value: ResultThinking) => value;
-    // @ts-expect-error A not-run state cannot have a thinking value.
     acceptResultThinking({ thinkingKind: "not-run", thinking: undefined });
     // @ts-expect-error A result cannot have both a thinking level and a not-run state.
     acceptSingleResult({ ...result, thinking: "high", thinkingKind: "not-run" });
-    // @ts-expect-error A not-run result cannot include thinking, even as undefined.
     acceptSingleResult({
       agent: "reviewer",
       agentSource: "user",

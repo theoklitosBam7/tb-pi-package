@@ -24,19 +24,6 @@ export type DictationUI = Pick<
   "select" | "confirm" | "notify" | "setWidget" | "getEditorText" | "setEditorText" | "custom"
 >;
 export type DictationContext = Pick<ExtensionContext, "mode"> & { ui: DictationUI };
-type DictationRegistration = {
-  registerCommand: (
-    name: string,
-    options: {
-      description: string;
-      handler: (args: string, ctx: DictationContext) => Promise<void>;
-    },
-  ) => void;
-  registerShortcut: (
-    shortcut: string,
-    options: { description: string; handler: (ctx: DictationContext) => Promise<void> },
-  ) => void;
-};
 
 const ObjectSchema = Type.Record(Type.String(), Type.Unknown());
 const MissingFileSchema = Type.Object({ code: Type.Literal("ENOENT") });
@@ -217,7 +204,7 @@ function addTranscript(ui: DictationUI, text: string): void {
 }
 
 function voiceDictation(
-  pi: DictationRegistration,
+  pi: Pick<ExtensionAPI, "registerCommand" | "registerShortcut">,
   dependencies: DictationDependencies = {
     listModels: () => listSpeechModels(),
     record: recordMicrophone,
