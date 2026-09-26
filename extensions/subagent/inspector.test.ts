@@ -363,11 +363,12 @@ describe("subagent inspector live bridge", () => {
   );
   it("shows message updates and tool activity before the child process finishes", async () => {
     const project = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-inspector-test-"));
+    vi.stubEnv("PI_CODING_AGENT_DIR", project);
     const agentDir = path.join(project, ".pi", "agents");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
       path.join(agentDir, "reviewer.md"),
-      "---\nname: reviewer\ndescription: Reviews changes\n---\nReview carefully.",
+      "---\nname: reviewer\ndescription: Reviews changes\nthinking: high\n---\nReview carefully.",
     );
 
     const process = Object.assign(new EventEmitter(), {
@@ -476,6 +477,7 @@ describe("subagent inspector live bridge", () => {
     expect(detail).toContain("read");
     expect(detail).toContain("src/index.ts");
     expect(detail).toContain("file contents");
+    expect(detail).toContain("Thinking: high");
 
     process.stdout.emit(
       "data",
@@ -904,6 +906,7 @@ describe("subagent inspector TUI", () => {
     expect(rows[0]).toContain("↓");
     const head = bodyOf(rows).map(inner).join("\n");
     expect(head).toContain("Model: test/model");
+    expect(head).toContain("Thinking: Pi default");
     expect(head).toContain("Task:");
     expect(head).toContain("Response:");
     component.dispose();

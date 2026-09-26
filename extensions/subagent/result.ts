@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { UsageTotals, UsageTotalsWithTurns } from "../lib/usage.js";
-import type { SubagentThinkingLevel } from "./agents.js";
+import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "./agents.js";
 
 interface AbortableProcess {
   kill(signal: NodeJS.Signals): boolean;
@@ -46,7 +46,7 @@ export interface ResultDisplayItem {
   args: Record<string, unknown>;
 }
 
-export interface SingleResult {
+interface SingleResultData {
   agent: string;
   agentSource: "user" | "project" | "unknown";
   task: string;
@@ -57,7 +57,6 @@ export interface SingleResult {
   descendantUsage?: UsageTotals;
   descendantRuns?: number;
   model?: string;
-  thinking?: SubagentThinkingLevel;
   systemPromptOverridden?: boolean;
   stopReason?: string;
   errorMessage?: string;
@@ -65,6 +64,13 @@ export interface SingleResult {
   outputPath?: string;
   displayItems?: ResultDisplayItem[];
 }
+
+export type ResultThinking =
+  | { thinkingKind: "configured"; thinking: SubagentThinkingLevel }
+  | { thinkingKind: "default"; thinking?: never }
+  | { thinkingKind: "not-run"; thinking?: never };
+
+export type SingleResult = SingleResultData & ResultThinking;
 
 function sanitizeArtifactName(value: string): string {
   return value.replace(/[^\w.-]+/g, "_");
@@ -91,10 +97,26 @@ function getResultSummaryStatus(
   return getResultStatus(result) === "completed" ? "completed" : "failed";
 }
 
+function formatResultThinking(result: SingleResult): string {
+  switch (result.thinkingKind) {
+    case "configured":
+      return getSubagentThinkingLabel(result.thinking);
+    case "default":
+      return getSubagentThinkingLabel(undefined);
+    case "not-run":
+      return "not run";
+    default: {
+      const _exhaustive: never = result;
+      return _exhaustive;
+    }
+  }
+}
+
 function formatArtifactMarkdown(options: {
   agent: string;
   status: "completed" | "failed" | "aborted";
   model?: string;
+  thinkingLabel: string;
   exitCode: number;
   stopReason?: string;
   taskLabel: string;
@@ -110,6 +132,7 @@ function formatArtifactMarkdown(options: {
     `- Agent: ${options.agent}`,
     `- Status: ${options.status}`,
     `- Model: ${options.model ?? "unknown"}`,
+    `- Thinking: ${options.thinkingLabel}`,
     `- Exit code: ${options.exitCode}`,
     ...(options.stopReason ? [`- Stop reason: ${options.stopReason}`] : []),
     `- Task: ${options.taskLabel}`,
@@ -249,6 +272,7 @@ export async function writeResultArtifact(options: {
     agent: result.agent,
     status,
     model: result.model,
+    thinkingLabel: formatResultThinking(result),
     exitCode: result.exitCode,
     stopReason: result.stopReason,
     taskLabel: options.taskLabel,

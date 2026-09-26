@@ -20,6 +20,7 @@ import {
   getResultStatus,
   installAbortHandler,
   isCompletedResult,
+  type ResultThinking,
   type SingleResult,
   writeResultArtifact,
 } from "./result.js";
@@ -223,7 +224,38 @@ describe("writeResultArtifact", () => {
         turns: 0,
       },
       model: "anthropic/claude-sonnet-4-5",
+      thinking: "medium",
+      thinkingKind: "configured",
     };
+    const acceptSingleResult = (value: SingleResult) => value;
+    const acceptResultThinking = (value: ResultThinking) => value;
+    // @ts-expect-error A not-run state cannot have a thinking value.
+    acceptResultThinking({ thinkingKind: "not-run", thinking: undefined });
+    // @ts-expect-error A result cannot have both a thinking level and a not-run state.
+    acceptSingleResult({ ...result, thinking: "high", thinkingKind: "not-run" });
+    // @ts-expect-error A not-run result cannot include thinking, even as undefined.
+    acceptSingleResult({
+      agent: "reviewer",
+      agentSource: "user",
+      task: "Review",
+      exitCode: 0,
+      messages: [],
+      stderr: "",
+      usage: result.usage,
+      thinkingKind: "not-run",
+      thinking: undefined,
+    });
+    // @ts-expect-error Every result must declare its thinking state.
+    const untaggedResult: SingleResult = {
+      agent: "reviewer",
+      agentSource: "user",
+      task: "Review",
+      exitCode: 0,
+      messages: [],
+      stderr: "",
+      usage: result.usage,
+    };
+    void untaggedResult;
 
     try {
       await writeResultArtifact({
@@ -236,6 +268,7 @@ describe("writeResultArtifact", () => {
       const artifact = fs.readFileSync(outputPath, "utf8");
       expect(artifact).toContain("- Status: completed");
       expect(artifact).toContain("- Model: anthropic/claude-sonnet-4-5");
+      expect(artifact).toContain("- Thinking: medium");
       expect(artifact).toContain("- Task: parallel item 2");
       expect(artifact).toContain("## Result\n\n# Finding\n\nComplete output.");
       expect(artifact).not.toContain("## Failure diagnostics");
@@ -249,9 +282,9 @@ describe("writeResultArtifact", () => {
   it("persists an aborted result privately and removes response messages from details", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-artifact-test-"));
     const outputPath = path.join(dir, "aborted.md");
-    const result = {
+    const result: SingleResult = {
       agent: "reviewer",
-      agentSource: "user" as const,
+      agentSource: "user",
       task: "Review",
       exitCode: 1,
       messages: [assistant("partial response")],
@@ -265,6 +298,7 @@ describe("writeResultArtifact", () => {
         contextTokens: 0,
         turns: 0,
       },
+      thinkingKind: "default",
       stopReason: "aborted",
       errorMessage: "Agent was aborted",
     };
@@ -279,6 +313,7 @@ describe("writeResultArtifact", () => {
 
       const artifact = fs.readFileSync(outputPath, "utf8");
       expect(artifact).toContain("- Status: aborted");
+      expect(artifact).toContain("- Thinking: Pi default");
       expect(artifact).toContain("- Stop reason: aborted");
       expect(artifact).toContain("## Result\n\npartial response");
       expect(artifact).toContain(
@@ -294,9 +329,9 @@ describe("writeResultArtifact", () => {
   it("omits an absent error message section from failed artifacts", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-artifact-test-"));
     const outputPath = path.join(dir, "stderr-only.md");
-    const result = {
+    const result: SingleResult = {
       agent: "reviewer",
-      agentSource: "user" as const,
+      agentSource: "user",
       task: "Review",
       exitCode: 1,
       messages: [assistant("partial response")],
@@ -310,6 +345,7 @@ describe("writeResultArtifact", () => {
         contextTokens: 0,
         turns: 0,
       },
+      thinkingKind: "default",
     };
 
     try {
@@ -332,13 +368,14 @@ describe("writeResultArtifact", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-artifact-test-"));
     const outputPath = path.join(dir, "result.md");
     fs.mkdirSync(outputPath);
-    const result = {
+    const result: SingleResult = {
       agent: "reviewer",
-      agentSource: "user" as const,
+      agentSource: "user",
       task: "Review",
       exitCode: 0,
       messages: [assistant("done")],
       stderr: "",
+      thinkingKind: "default",
       usage: {
         input: 0,
         output: 0,
@@ -387,6 +424,7 @@ describe("artifact-backed rendering", () => {
         } as Message,
       ],
       stderr: "",
+      thinkingKind: "default",
       usage: {
         input: 0,
         output: 0,
@@ -721,8 +759,135 @@ describe("subagent execution options", () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(result.isError).toBe(true);
     expect(result.details?.results[0].stderr).toContain("thinking must be one of");
+    const artifact = getResultOutput(result.details.results[0]);
+    expect(artifact).toContain("- Thinking: not run");
+    expect(artifact).not.toContain("- Thinking: Pi default");
     fs.rmSync(project, { recursive: true, force: true });
     vi.mocked(spawn).mockReset();
+  });
+
+  it("writes a not-run artifact when settings.json cannot be parsed", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-settings-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    fs.writeFileSync(path.join(project, "settings.json"), "{invalid json");
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const result = await tools.agent.execute(
+        "call-invalid-settings",
+        {
+          agent: "worker",
+          task: "should not run",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          model: undefined,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(result.isError).toBe(true);
+      expect(result.details?.results).toHaveLength(1);
+      expect(result.details.results[0].stderr).toContain("settings.json is not valid JSON");
+      expect(getResultOutput(result.details.results[0])).toContain("- Thinking: not run");
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+      vi.mocked(spawn).mockReset();
+    }
+  });
+
+  it("writes a not-run artifact for each parallel task when settings cannot load", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-parallel-settings-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    fs.writeFileSync(path.join(project, "settings.json"), "{invalid json");
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const result = await tools.agent.execute(
+        "call-invalid-parallel-settings",
+        {
+          tasks: [
+            { agent: "worker", task: "first task" },
+            { agent: "worker", task: "second task" },
+          ],
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          model: undefined,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(result.isError).toBe(true);
+      expect(result.details?.mode).toBe("parallel");
+      expect(result.details?.results).toHaveLength(2);
+      for (const item of result.details.results) {
+        expect(getResultOutput(item)).toContain("- Thinking: not run");
+        expect(item.stderr).toContain("settings.json is not valid JSON");
+        expect(result.content[0].text).toContain(item.outputPath);
+      }
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+      vi.mocked(spawn).mockReset();
+    }
+  });
+
+  it("stops a chain at its first not-run step when settings cannot load", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-chain-settings-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    fs.writeFileSync(path.join(project, "settings.json"), "{invalid json");
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const result = await tools.agent.execute(
+        "call-invalid-chain-settings",
+        {
+          chain: [
+            { agent: "worker", task: "first step" },
+            { agent: "worker", task: "second step" },
+          ],
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          model: undefined,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(result.isError).toBe(true);
+      expect(result.details?.mode).toBe("chain");
+      expect(result.details?.results).toHaveLength(1);
+      expect(result.details.results[0].step).toBe(1);
+      expect(getResultOutput(result.details.results[0])).toContain("- Thinking: not run");
+      expect(result.content[0].text).toContain(result.details.results[0].outputPath);
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+      vi.mocked(spawn).mockReset();
+    }
   });
 
   it("reports frontmatter and settings errors before spawning", async () => {
