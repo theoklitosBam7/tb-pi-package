@@ -30,7 +30,7 @@ Each override supports these fields:
 | `tools`        | string[] | Replaces frontmatter tools. Use a non-empty list of names without commas or surrounding whitespace. |
 | `systemPrompt` | string   | Replaces the agent's Markdown body. An empty string removes the agent-specific prompt.              |
 
-The model order is tool input, settings override, agent frontmatter, then the parent model. Settings `thinking` overrides frontmatter. If neither is set, Pi uses its default. Settings `tools` replaces frontmatter tools. If neither is set, Pi uses its default tools. The extension tries the next model after a model or API-key failure. Pi limits the configured thinking level to what the selected model supports.
+The model order is tool input, settings override, agent frontmatter, then the parent model. Thinking uses the same order: tool input, settings override, frontmatter, then the parent's current level, including `off`. Explicit `model: "inherit"` and `thinking: "inherit"` use the parent values ahead of settings and frontmatter. Settings `tools` replaces frontmatter tools. If neither is set, Pi uses its default tools. The extension tries the next model after a model or API-key failure. Pi limits the configured thinking level to what the selected model supports.
 
 `systemPrompt` replaces only the agent-specific prompt. The child process still receives Pi's standard system prompt, context files, tool guidance, and skills.
 

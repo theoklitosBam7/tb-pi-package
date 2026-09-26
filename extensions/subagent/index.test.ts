@@ -662,9 +662,10 @@ function createPersistenceTestChild() {
   });
 }
 
-function registerPersistenceTestTools(): Record<string, any> {
+function registerPersistenceTestTools(thinkingLevel?: "off" | "xhigh"): Record<string, any> {
   const tools: Record<string, any> = {};
   subagentExtension({
+    getThinkingLevel: () => thinkingLevel,
     on() {},
     registerTool(tool: any) {
       tools[tool.name] = tool;
@@ -676,6 +677,155 @@ function registerPersistenceTestTools(): Record<string, any> {
 }
 
 describe("subagent execution options", () => {
+  it("uses explicit parent model and thinking instead of scout settings", async () => {
+    const project = createPersistenceTestProject(
+      "explicit-inherit-",
+      "---\nname: worker\ndescription: Test worker\nmodel: frontmatter/model\nthinking: high\n---\n",
+    );
+    fs.writeFileSync(
+      path.join(project, "settings.json"),
+      JSON.stringify({
+        subagents: { agentOverrides: { worker: { model: "settings/model", thinking: "low" } } },
+      }),
+    );
+    const child = createPersistenceTestChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools("xhigh");
+
+    try {
+      const execution = tools.agent.execute(
+        "call-explicit-inherit",
+        {
+          agent: "worker",
+          task: "review",
+          model: "inherit",
+          thinking: "inherit",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          model: { provider: "openai", id: "gpt-5" },
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+      const args = vi.mocked(spawn).mock.calls[0]?.[1] ?? [];
+      child.emit("close", 0, null);
+      const result = await execution;
+
+      expect(args).toEqual(
+        expect.arrayContaining(["--model", "openai/gpt-5", "--thinking", "xhigh"]),
+      );
+      expect(result.details.results[0]).toMatchObject({ model: "openai/gpt-5", thinking: "xhigh" });
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+      vi.mocked(spawn).mockReset();
+    }
+  });
+
+  it.each(["parallel", "chain"] as const)(
+    "uses item model inheritance and explicit thinking in %s mode",
+    async (mode) => {
+      const project = createPersistenceTestProject(
+        "item-options-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      fs.writeFileSync(
+        path.join(project, "settings.json"),
+        JSON.stringify({
+          subagents: { agentOverrides: { worker: { model: "settings/model", thinking: "low" } } },
+        }),
+      );
+      const child = createPersistenceTestChild();
+      vi.mocked(spawn).mockReturnValue(child as never);
+      const tools = registerPersistenceTestTools("xhigh");
+
+      try {
+        const item = { agent: "worker", task: "review", model: "inherit", thinking: "off" };
+        const execution = tools.agent.execute(
+          `call-${mode}-options`,
+          {
+            [mode === "parallel" ? "tasks" : "chain"]: [item],
+            model: "top/model",
+            thinking: "high",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            model: { provider: "openai", id: "gpt-5" },
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+        const args = vi.mocked(spawn).mock.calls[0]?.[1] ?? [];
+        child.emit("close", 0, null);
+        const result = await execution;
+
+        expect(args).toEqual(
+          expect.arrayContaining(["--model", "openai/gpt-5", "--thinking", "off"]),
+        );
+        expect(result.details.results[0]).toMatchObject({ model: "openai/gpt-5", thinking: "off" });
+      } finally {
+        fs.rmSync(project, { recursive: true, force: true });
+        vi.mocked(spawn).mockReset();
+      }
+    },
+  );
+
+  it.each(["xhigh", "off"] as const)(
+    "inherits parent thinking %s when the agent has no thinking setting",
+    async (thinkingLevel) => {
+      const project = createPersistenceTestProject(
+        "parent-thinking-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const child = createPersistenceTestChild();
+      vi.mocked(spawn).mockReturnValue(child as never);
+      const tools = registerPersistenceTestTools(thinkingLevel);
+
+      try {
+        const execution = tools.agent.execute(
+          "call-parent-thinking",
+          { agent: "worker", task: "review", agentScope: "project", confirmProjectAgents: false },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            model: { provider: "openai", id: "gpt-5" },
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+        const args = vi.mocked(spawn).mock.calls[0]?.[1] ?? [];
+        child.emit("close", 0, null);
+        const result = await execution;
+
+        expect(args).toEqual(
+          expect.arrayContaining(["--model", "openai/gpt-5", "--thinking", thinkingLevel]),
+        );
+        expect(result.details.results[0]).toMatchObject({
+          thinkingKind: "configured",
+          thinking: thinkingLevel,
+        });
+      } finally {
+        fs.rmSync(project, { recursive: true, force: true });
+        vi.mocked(spawn).mockReset();
+      }
+    },
+  );
+
   it("passes settings thinking and tools to the child process", async () => {
     const project = createPersistenceTestProject(
       "options-test-",
@@ -693,7 +843,7 @@ describe("subagent execution options", () => {
     );
     const child = createPersistenceTestChild();
     vi.mocked(spawn).mockReturnValue(child as never);
-    const tools = registerPersistenceTestTools();
+    const tools = registerPersistenceTestTools("xhigh");
 
     const execution = tools.agent.execute(
       "call-options",

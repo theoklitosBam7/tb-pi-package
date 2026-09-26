@@ -187,7 +187,7 @@ export interface ResolvedAgentOptions {
   effectiveModel?: string;
   effectiveModelSource: EffectiveModelSource;
   thinking?: SubagentThinkingLevel;
-  thinkingSource?: "settings" | "frontmatter";
+  thinkingSource?: "tool" | "settings" | "frontmatter";
   tools?: string[];
   systemPrompt: string;
   systemPromptOverridden: boolean;
@@ -196,10 +196,18 @@ export interface ResolvedAgentOptions {
 export function resolveAgentOptions(
   agent: AgentConfig,
   override: AgentOverride | undefined,
-  options: { modelOverride?: string; parentModel?: string } = {},
+  options: {
+    modelOverride?: string;
+    parentModel?: string;
+    parentThinking?: SubagentThinkingLevel;
+    thinkingOverride?: SubagentThinkingLevel | "inherit";
+  } = {},
 ): ResolvedAgentOptions {
   const candidates: Array<{ model: string | undefined; source: EffectiveModelSource }> = [
-    { model: options.modelOverride, source: "tool" },
+    {
+      model: options.modelOverride === "inherit" ? options.parentModel : options.modelOverride,
+      source: "tool",
+    },
     { model: override?.model, source: "settings" },
     { model: agent.model, source: "frontmatter" },
     { model: options.parentModel, source: "parent" },
@@ -220,13 +228,21 @@ export function resolveAgentOptions(
 
   const overrideSystemPrompt = override?.systemPrompt;
   const systemPromptOverridden = overrideSystemPrompt !== undefined;
-  const thinking = override?.thinking ?? agent.thinking;
+  const thinking =
+    options.thinkingOverride === "inherit"
+      ? options.parentThinking
+      : (options.thinkingOverride ??
+        override?.thinking ??
+        agent.thinking ??
+        options.parentThinking);
   const thinkingSource =
-    override?.thinking !== undefined
-      ? "settings"
-      : agent.thinking !== undefined
-        ? "frontmatter"
-        : undefined;
+    options.thinkingOverride !== undefined
+      ? "tool"
+      : override?.thinking !== undefined
+        ? "settings"
+        : agent.thinking !== undefined
+          ? "frontmatter"
+          : undefined;
   return {
     modelsToTry,
     effectiveModel,
