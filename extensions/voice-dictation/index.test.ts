@@ -2,8 +2,27 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import voiceDictation, { listSpeechModels, transcribeFile } from "./index.js";
+import type { DictationContext, DictationUI } from "./index.js";
+
+type CommandOptions = Parameters<Parameters<typeof voiceDictation>[0]["registerCommand"]>[1];
+type ShortcutOptions = Parameters<Parameters<typeof voiceDictation>[0]["registerShortcut"]>[1];
+
+function testContext(ui: Partial<DictationUI>): DictationContext {
+  return {
+    mode: "tui",
+    ui: {
+      select: async () => undefined,
+      confirm: async () => false,
+      notify: vi.fn(),
+      setWidget: vi.fn(),
+      getEditorText: () => "",
+      setEditorText: vi.fn(),
+      custom: vi.fn(),
+      ...ui,
+    },
+  };
+}
 
 describe("Foundry speech commands", () => {
   it("lists speech variants with their exact versioned IDs", async () => {
@@ -54,11 +73,11 @@ describe("Foundry speech commands", () => {
   it("transcribes an audio file with the selected model", async () => {
     const run = vi.fn().mockResolvedValue('{"text":"Turn left at the next street."}');
     expect(
-      await transcribeFile(
+      await transcribeFile({
         run,
-        "/tmp/recording.wav",
-        "nemotron-3.5-asr-streaming-0.6b-generic-cpu:3",
-      ),
+        file: "/tmp/recording.wav",
+        model: "nemotron-3.5-asr-streaming-0.6b-generic-cpu:3",
+      }),
     ).toBe("Turn left at the next street.");
     expect(run).toHaveBeenCalledWith([
       "transcribe",
@@ -87,9 +106,8 @@ afterEach(async () => {
 
 describe("/dictate", () => {
   it("shows download progress before recording an uncached model", async () => {
-    type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
     let command: CommandOptions | undefined;
-    const extension: Pick<ExtensionAPI, "registerCommand" | "registerShortcut"> = {
+    const extension: Parameters<typeof voiceDictation>[0] = {
       registerShortcut() {},
       registerCommand(name, options) {
         if (name === "dictate") command = options;
@@ -118,17 +136,16 @@ describe("/dictate", () => {
       await settingsFile(model.id),
     );
     const widgets: Array<string[] | undefined> = [];
-    await command?.handler("", {
-      mode: "tui",
-      ui: {
-        select: async (_title: string, options: string[]) => options[0],
+    await command?.handler(
+      "",
+      testContext({
+        select: async (_title, options) => options[0],
         confirm: async () => true,
-        setWidget: (_key: string, content: string[] | undefined) => {
+        setWidget: (_key, content) => {
           widgets.push(content);
         },
-        notify: vi.fn(),
-      },
-    } as never);
+      }),
+    );
     expect(download).toHaveBeenCalledWith(model, expect.any(Function));
     expect(widgets).toEqual([
       [expect.stringContaining("Downloading")],
@@ -140,9 +157,8 @@ describe("/dictate", () => {
   });
 
   it("uses a live session for a Nemotron model that rejects audio files", async () => {
-    type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
     let command: CommandOptions | undefined;
-    const extension: Pick<ExtensionAPI, "registerCommand" | "registerShortcut"> = {
+    const extension: Parameters<typeof voiceDictation>[0] = {
       registerShortcut() {},
       registerCommand(name, options) {
         if (name === "dictate") command = options;
@@ -174,25 +190,21 @@ describe("/dictate", () => {
       await settingsFile(model.id),
     );
     const setEditorText = vi.fn();
-    await command?.handler("", {
-      mode: "tui",
-      ui: {
-        select: async (_title: string, options: string[]) => options[0],
+    await command?.handler(
+      "",
+      testContext({
         getEditorText: () => "Before",
         setEditorText,
-        setWidget: vi.fn(),
-        notify: vi.fn(),
-      },
-    } as never);
+      }),
+    );
     expect(transcribe).not.toHaveBeenCalled();
     expect(liveTranscribe).toHaveBeenCalledWith(model, expect.anything());
     expect(setEditorText).toHaveBeenCalledWith("Before\nLive speech works.");
   });
 
   it("inserts the transcript after existing editor text without sending it", async () => {
-    type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
     let command: CommandOptions | undefined;
-    const extension: Pick<ExtensionAPI, "registerCommand" | "registerShortcut"> = {
+    const extension: Parameters<typeof voiceDictation>[0] = {
       registerShortcut() {},
       registerCommand(name, options) {
         if (name === "dictate") command = options;
@@ -221,15 +233,10 @@ describe("/dictate", () => {
     );
     const setEditorText = vi.fn();
     const notify = vi.fn();
-    await command?.handler("", {
-      mode: "tui",
-      ui: {
-        select: async (_title: string, options: string[]) => options[0],
-        getEditorText: () => "Before",
-        setEditorText,
-        notify,
-      },
-    } as never);
+    await command?.handler(
+      "",
+      testContext({ getEditorText: () => "Before", setEditorText, notify }),
+    );
     expect(setEditorText).toHaveBeenCalledWith("Before\nTurn left at the next street.");
     expect(record).toHaveBeenCalledOnce();
     expect(transcribe).toHaveBeenCalledWith(
@@ -241,7 +248,7 @@ describe("/dictate", () => {
   it("selects a model with /dictate model and saves it without recording", async () => {
     const path = await settingsFile("old-id");
     const model = { alias: "whisper-tiny", id: "new-id", cached: true, sizeMb: 131 };
-    let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+    let command: CommandOptions | undefined;
     const record = vi.fn();
     voiceDictation(
       {
@@ -260,13 +267,10 @@ describe("/dictate", () => {
       path,
     );
     const notify = vi.fn();
-    await command?.handler("model", {
-      mode: "tui",
-      ui: {
-        select: async () => "whisper-tiny | new-id | cached",
-        notify,
-      },
-    } as never);
+    await command?.handler(
+      "model",
+      testContext({ select: async () => "whisper-tiny | new-id | cached", notify }),
+    );
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
       theme: "dark",
       voiceDictation: { model: "new-id" },
@@ -276,7 +280,7 @@ describe("/dictate", () => {
 
   it("asks for /dictate model when no model is saved", async () => {
     const path = await settingsFile();
-    let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+    let command: CommandOptions | undefined;
     const listModels = vi.fn();
     voiceDictation(
       {
@@ -295,14 +299,14 @@ describe("/dictate", () => {
       path,
     );
     const notify = vi.fn();
-    await command?.handler("", { mode: "tui", ui: { notify } } as never);
+    await command?.handler("", testContext({ notify }));
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("/dictate model"), "warning");
     expect(listModels).not.toHaveBeenCalled();
   });
 
   it("asks for /dictate model if the saved model is no longer available", async () => {
     const path = await settingsFile("old-id");
-    let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+    let command: CommandOptions | undefined;
     const record = vi.fn();
     voiceDictation(
       {
@@ -323,7 +327,7 @@ describe("/dictate", () => {
       path,
     );
     const notify = vi.fn();
-    await command?.handler("", { mode: "tui", ui: { notify } } as never);
+    await command?.handler("", testContext({ notify }));
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("/dictate model"), "warning");
     expect(record).not.toHaveBeenCalled();
   });
@@ -331,7 +335,7 @@ describe("/dictate", () => {
   it("does not overwrite invalid user settings while selecting a model", async () => {
     const path = await settingsFile();
     await writeFile(path, "{bad json");
-    let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+    let command: CommandOptions | undefined;
     voiceDictation(
       {
         registerCommand: (_name, options) => {
@@ -351,13 +355,10 @@ describe("/dictate", () => {
       path,
     );
     const notify = vi.fn();
-    await command?.handler("model", {
-      mode: "tui",
-      ui: {
-        select: async () => "whisper-tiny | new-id | cached",
-        notify,
-      },
-    } as never);
+    await command?.handler(
+      "model",
+      testContext({ select: async () => "whisper-tiny | new-id | cached", notify }),
+    );
     expect(await readFile(path, "utf8")).toBe("{bad json");
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("not valid JSON"), "error");
   });
@@ -370,7 +371,7 @@ describe("/dictate", () => {
       sizeMb: 696,
     };
     const path = await settingsFile(model.id);
-    let shortcut: Parameters<ExtensionAPI["registerShortcut"]>[1] | undefined;
+    let shortcut: ShortcutOptions | undefined;
     const liveTranscribe = vi.fn().mockImplementation(async (_model, ui) => {
       expect(ui.setWidget).toHaveBeenCalledWith("voice-dictation", [
         expect.stringContaining("Preparing"),
@@ -397,16 +398,7 @@ describe("/dictate", () => {
     const select = vi.fn();
     const setEditorText = vi.fn();
     const setWidget = vi.fn();
-    await shortcut?.handler({
-      mode: "tui",
-      ui: {
-        select,
-        setEditorText,
-        getEditorText: () => "",
-        setWidget,
-        notify: vi.fn(),
-      },
-    } as never);
+    await shortcut?.handler(testContext({ select, setEditorText, setWidget }));
     expect(select).not.toHaveBeenCalled();
     expect(liveTranscribe).toHaveBeenCalledWith(model, expect.anything());
     expect(setEditorText).toHaveBeenCalledWith("Spoken text");

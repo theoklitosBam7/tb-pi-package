@@ -34,21 +34,25 @@ describe("Foundry live transcription", () => {
       },
     };
     const ui = {
-      custom: async (
+      custom: async <T>(
         factory: (
           tui: unknown,
-          theme: { fg: (_color: string, text: string) => string },
+          theme: { fg: (_color: "accent", text: string) => string },
           kb: unknown,
-          done: (result: string) => void,
-        ) => { handleInput(data: string): void; render(width: number): string[] },
+          done: (result: T) => void,
+        ) => {
+          handleInput(data: string): void;
+          render(width: number): string[];
+          invalidate(): void;
+        },
       ) =>
-        new Promise<string>((resolve) => {
+        new Promise<T>((resolve) => {
           const component = factory(undefined, { fg: (_color, text) => text }, undefined, resolve);
           expect(component.render(120).join(" ")).toContain("Microphone listening");
           setTimeout(() => component.handleInput("\r"), 350);
         }),
     };
-    expect(await recordLiveSession(session, recorder, ui as never)).toBe("Hello");
+    expect(await recordLiveSession(session, recorder, ui)).toBe("Hello");
     expect(session.append).toHaveBeenCalled();
     expect(recorder.exitCode).toBe(255);
   });

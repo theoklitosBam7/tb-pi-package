@@ -6,6 +6,30 @@ import type { IModel, LiveAudioTranscriptionSession } from "foundry-local-sdk";
 type Session = Pick<LiveAudioTranscriptionSession, "start" | "append" | "stop" | "getStream">;
 type ModelChoice = { alias: string; id: string };
 
+type RecordingUI = {
+  custom<T>(
+    factory: (
+      tui: unknown,
+      theme: { fg: (color: "accent", text: string) => string },
+      keybindings: unknown,
+      done: (result: T) => void,
+    ) => { render(width: number): string[]; invalidate(): void; handleInput(data: string): void },
+  ): Promise<T>;
+};
+
+export const microphoneInputArgs = [
+  "-f",
+  "avfoundation",
+  "-i",
+  ":default",
+  "-ac",
+  "1",
+  "-ar",
+  "16000",
+  "-c:a",
+  "pcm_s16le",
+];
+
 export async function transcribePcm(
   session: Session,
   pcm: AsyncIterable<Uint8Array>,
@@ -64,7 +88,7 @@ export async function downloadModel(
 export async function transcribeLive(
   choice: ModelChoice,
   cacheDir: string,
-  ui: ExtensionUIContext,
+  ui: Pick<ExtensionUIContext, "custom" | "setWidget">,
 ): Promise<string | undefined> {
   if (process.platform !== "darwin")
     throw new Error("Microphone recording currently requires macOS");
@@ -84,16 +108,7 @@ export async function transcribeLive(
         "-loglevel",
         "error",
         "-nostdin",
-        "-f",
-        "avfoundation",
-        "-i",
-        ":default",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
+        ...microphoneInputArgs,
         "-f",
         "s16le",
         "pipe:1",
@@ -119,7 +134,7 @@ export async function transcribeLive(
 export async function recordLiveSession(
   session: Session,
   recorder: ReturnType<typeof spawn>,
-  ui: ExtensionUIContext,
+  ui: RecordingUI,
 ): Promise<string | undefined> {
   let stderr = "";
   recorder.stderr.setEncoding("utf8");
