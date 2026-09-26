@@ -36,7 +36,7 @@
     "lint:check": "oxlint"
   },
   "dependencies": {
-    "foundry-local-sdk": "1.2.4",
+    "foundry-local-sdk": "2.0.1",
     "turndown": "^7.2.4"
   },
   "devDependencies": {
