@@ -16,6 +16,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
 - **Commands browser** — List all registered slash commands via `/commands`.
 - **Session cost report** — View main-agent, subagent, nested, and combined token and cost totals with `/session-costs`.
+- **Voice dictation** — Select a Foundry Local speech model with `/dictate model`, then use `/dictate` or Control+Option+R to add speech to the editor.
 - **4 built-in agents:** Scout, researcher, implementer, and reviewer, each tuned for a specific task.
 - **Workflow prompts:** Reusable templates for scouting, research, implementation, review, implementation review, and wiki generation.
 
@@ -38,14 +39,23 @@ Once installed, the package's extensions, agents, and prompts are available auto
 
 ### Extensions
 
-| Extension       | Tool(s)                   | Command            | Description                                                              |
-| --------------- | ------------------------- | ------------------ | ------------------------------------------------------------------------ |
-| `subagent`      | `agent`                   | `/agent-inspector` | Spawn and inspect isolated agents for single, parallel, or chained tasks |
-| `ask-user`      | `ask_user`                | —                  | Ask structured questions in TUI or RPC mode                              |
-| `web-search`    | `web_search`, `web_fetch` | —                  | Search the web and fetch page content                                    |
-| `list-agents`   | `list_agents`             | `/agents`          | Discover and browse agent definitions                                    |
-| `commands`      | —                         | `/commands`        | List all registered slash commands                                       |
-| `session-costs` | —                         | `/session-costs`   | Show main-agent and subagent token and cost usage                        |
+| Extension         | Tool(s)                   | Command            | Description                                                              |
+| ----------------- | ------------------------- | ------------------ | ------------------------------------------------------------------------ |
+| `subagent`        | `agent`                   | `/agent-inspector` | Spawn and inspect isolated agents for single, parallel, or chained tasks |
+| `ask-user`        | `ask_user`                | —                  | Ask structured questions in TUI or RPC mode                              |
+| `web-search`      | `web_search`, `web_fetch` | —                  | Search the web and fetch page content                                    |
+| `list-agents`     | `list_agents`             | `/agents`          | Discover and browse agent definitions                                    |
+| `commands`        | —                         | `/commands`        | List all registered slash commands                                       |
+| `session-costs`   | —                         | `/session-costs`   | Show main-agent and subagent token and cost usage                        |
+| `voice-dictation` | —                         | `/dictate`         | Dictate with a local speech model and add text to the editor             |
+
+### Voice dictation
+
+On macOS, install [Foundry Local](https://learn.microsoft.com/en-us/azure/foundry-local/reference/reference-cli) and [FFmpeg](https://ffmpeg.org/). Make sure `foundry` and `ffmpeg` are on your `PATH`. Allow microphone access for your terminal when macOS asks.
+
+Run `/dictate model` in Pi's terminal UI to choose a Foundry Local speech model. The list shows model IDs, cache status, and download size. Pi saves the choice in `~/.pi/agent/settings.json` under `voiceDictation.model` (or in the configured agent directory). Then run `/dictate` or press Control+Option+R to start with that model without opening the list. If no model is saved, or the saved model is unavailable, Pi asks you to run `/dictate model`. If the model is not cached, confirm its download. Pi shows download progress, then shows when the microphone is listening. Press Enter to stop, or Esc to cancel. Pi adds the transcript to any text already in the editor; it does not send the prompt. Review the text before you submit it.
+
+The current Foundry speech catalog routes `nemotron-3.5-asr-streaming-0.6b`, `nemotron-speech-streaming-en-0.6b`, and `nemotron-speech-streaming-es-0.6b` through live transcription. These sessions do not save a recording. The `parakeet-tdt-0.6b-v2` model and the `whisper-base`, `whisper-large-v3-turbo`, `whisper-medium`, `whisper-small`, and `whisper-tiny` models use file transcription. The extension stores these recordings in a temporary file and removes it after transcription or cancellation. It uses the installed Foundry CLI to find models and the active cache, and the Foundry SDK for downloads and live sessions. It does not need a fixed server port. Microphone capture on Windows or Linux is not supported.
 
 ### Session costs
 
@@ -175,6 +185,7 @@ tb-pi-package/
 │   ├── list-agents.ts   # /agents command + list_agents tool
 │   ├── session-costs/   # /session-costs slash command
 │   │   └── index.ts
+│   ├── voice-dictation/ # /dictate Foundry Local microphone command
 │   ├── subagent/        # Agent tool (single/parallel/chain modes)
 │   │   ├── agents.ts    # Agent discovery & parsing
 │   │   ├── index.ts     # Subagent tool + TUI rendering
