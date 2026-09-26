@@ -37,145 +37,25 @@ pi -e git:github.com/theoklitosBam7/tb-pi-package
 
 Once installed, the package's extensions, agents, and prompts are available automatically in pi.
 
-### Extensions
+Detailed guides live in [`docs/`](docs/):
 
-| Extension         | Tool(s)                   | Command            | Description                                                              |
-| ----------------- | ------------------------- | ------------------ | ------------------------------------------------------------------------ |
-| `subagent`        | `agent`                   | `/agent-inspector` | Spawn and inspect isolated agents for single, parallel, or chained tasks |
-| `ask-user`        | `ask_user`                | —                  | Ask structured questions in TUI or RPC mode                              |
-| `web-search`      | `web_search`, `web_fetch` | —                  | Search the web and fetch page content                                    |
-| `list-agents`     | `list_agents`             | `/agents`          | Discover and browse agent definitions                                    |
-| `commands`        | —                         | `/commands`        | List all registered slash commands                                       |
-| `session-costs`   | —                         | `/session-costs`   | Show main-agent and subagent token and cost usage                        |
-| `voice-dictation` | —                         | `/dictate`         | Dictate with a local speech model and add text to the editor             |
-
-### Voice dictation
-
-On macOS, install [Foundry Local](https://learn.microsoft.com/en-us/azure/foundry-local/reference/reference-cli) and [FFmpeg](https://ffmpeg.org/). Make sure `foundry` and `ffmpeg` are on your `PATH`. Allow microphone access for your terminal when macOS asks.
-
-Run `/dictate model` in Pi's terminal UI to choose a Foundry Local speech model. The list shows model IDs, cache status, and download size. Pi saves the choice in `~/.pi/agent/settings.json` under `voiceDictation.model` (or in the configured agent directory). Then run `/dictate` or press Control+Option+R to start with that model without opening the list. If no model is saved, or the saved model is unavailable, Pi asks you to run `/dictate model`. If the model is not cached, confirm its download. Pi shows download progress, then shows when the microphone is listening. Press Enter to stop, or Esc to cancel. Pi adds the transcript to any text already in the editor; it does not send the prompt. Review the text before you submit it.
-
-The current Foundry speech catalog routes `nemotron-3.5-asr-streaming-0.6b`, `nemotron-speech-streaming-en-0.6b`, and `nemotron-speech-streaming-es-0.6b` through live transcription. These sessions do not save a recording. The `parakeet-tdt-0.6b-v2` model and the `whisper-base`, `whisper-large-v3-turbo`, `whisper-medium`, `whisper-small`, and `whisper-tiny` models use file transcription. The extension stores these recordings in a temporary file and removes it after transcription or cancellation. It uses the installed Foundry CLI to find models and the active cache, and the Foundry SDK for downloads and live sessions. It does not need a fixed server port. Microphone capture on Windows or Linux is not supported.
-
-### Session costs
-
-Run `/session-costs` to see token and cost totals for the current session. The report includes main-agent usage, direct subagent usage, nested subagent usage, and combined totals.
-
-The report uses Pi's billed-token rules. Prompt tokens are `input + cacheRead + cacheWrite`. Total tokens add `output`, and cost uses each recorded `cost.total` value. It scans all session entries, so its main totals match Pi's `/session` accounting. Pi's `/session` does not recurse into subagent details, and this command does not change `/session`.
-
-Older subagent records may not contain nested usage. `/session-costs` reports a warning when it cannot recover that usage instead of treating it as zero.
-
-### Agents
-
-Agents are Markdown files in `agents/`. Set frontmatter `thinking` to `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. For example:
-
-```md
----
-name: reviewer
-description: Reviews changes
-tools: read, rg
-thinking: high
----
-
-Review changes for correctness and test coverage.
-```
-
-| Agent         | Type             | Role                                                                        |
-| ------------- | ---------------- | --------------------------------------------------------------------------- |
-| `scout`       | `exploration`    | Maps files, execution paths, tests, constraints, and unknowns               |
-| `researcher`  | `research`       | Answers external technical questions with traceable primary-source evidence |
-| `implementer` | `implementation` | Implements a bounded task and reports tests and validation                  |
-| `reviewer`    | `review`         | Independently reviews diffs, plans, solutions, and bounded code areas       |
-
-### Prompts
-
-Prompt templates in `prompts/` provide ready-made single-agent and chained workflows:
-
-| Prompt                 | Workflow                                                          |
-| ---------------------- | ----------------------------------------------------------------- |
-| `scout`                | Map a repository area with the scout agent                        |
-| `research`             | Research an external technical question with the researcher agent |
-| `implement`            | Scout the codebase, then implement with the implementer agent     |
-| `implement-and-review` | Implement, review, then apply confirmed fixes                     |
-| `review`               | Standalone review through the reviewer agent                      |
-| `generate-wiki`        | Scout a repository, then create or update wiki pages              |
-
-### Subagent Tool Examples
-
-```
-# Single task
-agent({ agent: "scout", task: "Map the auth module and summarize its structure" })
-
-# Parallel tasks
-agent({ tasks: [
-  { agent: "scout", task: "Map the API layer" },
-  { agent: "scout", task: "Map the database layer" }
-]})
-
-# Chained workflow (output of step N feeds into step N+1 via {previous})
-agent({ chain: [
-  { agent: "scout", task: "Investigate the caching module" },
-  { agent: "implementer", task: "Implement TTL support using this context: {previous}" }
-]})
-```
-
-### Inspect running agents
-
-In pi's terminal UI, use `/agent-inspector` or press `Ctrl+Shift+A`. Select a run with the arrow keys and press Enter to see its task, model, status, live response, and tool activity. Each invocation has a separate run ID, including repeated calls to the same agent.
-
-Use Up/Down or Page Up/Page Down to scroll. Home shows the start; End follows new output. In a running run's detail view, press `x` to stop that run. The list view ignores `x`. Escape returns to the run list, then closes the inspector. Closing the view does not stop the agent.
-
-The list keeps active runs and up to 50 completed runs in memory. Long output is truncated with a notice. Reloading or leaving the session clears this history; result files are unchanged. `/agents` still browses agent definitions.
-
-### Agent instructions
-
-`.pi/AGENTS_example.md` is a starting point for `~/.pi/agent/AGENTS.md`. Copy it and adapt it to your workflow. The example is not loaded automatically because its filename is intentionally different.
-
-### Subagent overrides
-
-Set persistent overrides by agent name in Pi's global `settings.json`. Pi normally stores this file at `~/.pi/agent/settings.json`. If you configure a different agent directory, the extension reads `settings.json` from that directory instead.
-
-```json
-{
-  "subagents": {
-    "agentOverrides": {
-      "researcher": {
-        "model": "openai-codex/gpt-6-luna",
-        "thinking": "medium",
-        "systemPrompt": "Use primary sources and report unknowns."
-      },
-      "reviewer": {
-        "model": "another-provider/model-1",
-        "thinking": "xhigh",
-        "tools": ["read", "rg"]
-      }
-    }
-  }
-}
-```
-
-Each override supports these fields:
-
-| Field          | Type     | Behavior                                                                                            |
-| -------------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `model`        | string   | Adds a model choice after the tool input and before agent frontmatter in the fallback order.        |
-| `thinking`     | string   | Accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.                               |
-| `tools`        | string[] | Replaces frontmatter tools. Use a non-empty list of names without commas or surrounding whitespace. |
-| `systemPrompt` | string   | Replaces the agent's Markdown body. An empty string removes the agent-specific prompt.              |
-
-The model order is tool input, settings override, agent frontmatter, then the parent model. Settings `thinking` overrides frontmatter. If neither is set, Pi uses its default. Settings `tools` replaces frontmatter tools. If neither is set, Pi uses its default tools. The extension tries the next model after a model or API-key failure. Pi limits the configured thinking level to what the selected model supports.
-
-`systemPrompt` replaces only the agent-specific prompt. The child process still receives Pi's standard system prompt, context files, tool guidance, and skills.
-
-The extension reads one settings snapshot at the start of each `agent` or `list_agents` call. File changes apply on the next call without `/reload`. Overrides match the resolved agent's exact name, including agents selected through `subagent_type`. Unknown agent names are ignored.
-
-Invalid per-agent settings or an invalid frontmatter `thinking` value stop the affected agent before it starts. `/agents` and `list_agents` show per-agent errors while listing other agents. A malformed `settings.json` prevents the listing. The commands report whether a settings prompt override is active, but do not print the prompt text.
+| Document                                         | Covers                                       |
+| ------------------------------------------------ | -------------------------------------------- |
+| [Extensions](docs/extensions.md)                 | Tools and slash commands each extension adds |
+| [Subagent tool](docs/subagent-tool.md)           | Single, parallel, and chained task examples  |
+| [Agent inspector](docs/agent-inspector.md)       | Inspect running and completed agent runs     |
+| [Agent definitions](docs/agent-definitions.md)   | Agent files, built-in agents, AGENTS example |
+| [Prompts](docs/prompts.md)                       | Workflow prompt templates                    |
+| [Voice dictation](docs/voice-dictation.md)       | Foundry Local setup and `/dictate` usage     |
+| [Session costs](docs/session-costs.md)           | `/session-costs` report and token accounting |
+| [Subagent overrides](docs/subagent-overrides.md) | Per-agent `settings.json` overrides          |
 
 ## Project Structure
 
 ```
 tb-pi-package/
 ├── agents/              # Agent definitions (Markdown with frontmatter)
+├── docs/                # Feature guides and ADRs
 ├── extensions/
 │   ├── ask-user/        # ask_user questionnaire tool
 │   │   └── index.ts
