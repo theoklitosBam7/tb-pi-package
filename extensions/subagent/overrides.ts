@@ -218,7 +218,8 @@ export function resolveAgentOptions(
   }
   if (modelsToTry.length === 0) modelsToTry.push(undefined);
 
-  const systemPromptOverridden = override?.systemPrompt !== undefined;
+  const overrideSystemPrompt = override?.systemPrompt;
+  const systemPromptOverridden = overrideSystemPrompt !== undefined;
   const thinking = override?.thinking ?? agent.thinking;
   const thinkingSource =
     override?.thinking !== undefined
@@ -233,7 +234,7 @@ export function resolveAgentOptions(
     thinking,
     thinkingSource,
     tools: override?.tools ?? agent.tools,
-    systemPrompt: systemPromptOverridden ? override.systemPrompt : agent.systemPrompt,
+    systemPrompt: systemPromptOverridden ? overrideSystemPrompt : agent.systemPrompt,
     systemPromptOverridden,
   };
 }

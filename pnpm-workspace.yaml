@@ -1,6 +1,8 @@
-minimumReleaseAge: 4320 # 3 days, in minutes
+minimumReleaseAge: 1440 # 1 day, in minutes
+
 minimumReleaseAgeExclude:
   - "@earendil-works/*"
+
 allowBuilds:
   simple-git-hooks: true
   "@google/genai": false

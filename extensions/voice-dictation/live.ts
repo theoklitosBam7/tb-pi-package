@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
+import type { Readable } from "node:stream";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { IModel, LiveAudioTranscriptionSession } from "foundry-local-sdk";
@@ -133,7 +134,7 @@ export async function transcribeLive(
 
 export async function recordLiveSession(
   session: Session,
-  recorder: ReturnType<typeof spawn>,
+  recorder: ChildProcessByStdio<null, Readable, Readable>,
   ui: RecordingUI,
 ): Promise<string | undefined> {
   let stderr = "";

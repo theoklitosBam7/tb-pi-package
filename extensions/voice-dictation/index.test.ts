@@ -3,12 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import voiceDictation, { listSpeechModels, transcribeFile } from "./index.js";
-import type { DictationContext, DictationUI } from "./index.js";
+import type { DictationUI } from "./index.js";
 
 type CommandOptions = Parameters<Parameters<typeof voiceDictation>[0]["registerCommand"]>[1];
 type ShortcutOptions = Parameters<Parameters<typeof voiceDictation>[0]["registerShortcut"]>[1];
+type CommandContext = Parameters<CommandOptions["handler"]>[1];
 
-function testContext(ui: Partial<DictationUI>): DictationContext {
+function testContext(ui: Partial<DictationUI>): CommandContext {
   return {
     mode: "tui",
     ui: {
@@ -21,7 +22,7 @@ function testContext(ui: Partial<DictationUI>): DictationContext {
       custom: vi.fn(),
       ...ui,
     },
-  };
+  } as CommandContext;
 }
 
 describe("Foundry speech commands", () => {
@@ -142,7 +143,7 @@ describe("/dictate", () => {
         select: async (_title, options) => options[0],
         confirm: async () => true,
         setWidget: (_key, content) => {
-          widgets.push(content);
+          if (Array.isArray(content) || content === undefined) widgets.push(content);
         },
       }),
     );

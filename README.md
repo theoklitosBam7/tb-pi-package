@@ -84,7 +84,7 @@ tb-pi-package/
 
 - [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) — install separately before using this package
 - [Node.js](https://nodejs.org/) >= 22.22.3
-- [pnpm](https://pnpm.io/) v11
+- [pnpm](https://pnpm.io/) v12.6.0
 
 ### Setup
 
