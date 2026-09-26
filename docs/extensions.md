@@ -26,9 +26,7 @@ Each extension below ships with this package and loads automatically in pi.
 
 ## web_search and web_fetch
 
-`web_search` searches DuckDuckGo. It takes `query` and an optional `max_results` (default 8), and returns titles, URLs, and snippets.
-
-`web_fetch` fetches a page by `url` and returns its content. HTML and XHTML pages convert to Markdown; raw files return as-is. The optional `max_length` (default 10000) caps each chunk, and `offset` paginates through long content. The conversion design is recorded in [ADR 0001](adr/0001-html-to-markdown-for-web-fetch.md).
+`web_search` finds DuckDuckGo results; `web_fetch` reads public pages as text or Markdown. See [Web search and fetch](web-search.md) for examples, limits, pagination, and source-trust guidance.
 
 ## list_agents
 

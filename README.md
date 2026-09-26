@@ -35,13 +35,14 @@ pi -e git:github.com/theoklitosBam7/tb-pi-package
 
 ## Usage
 
-Once installed, the package's extensions, agents, and prompts are available automatically in pi.
+Once installed, the package's extensions, agents, prompts, and web-search skill are available automatically in pi.
 
 Detailed guides live in [`docs/`](docs/):
 
 | Document                                         | Covers                                       |
 | ------------------------------------------------ | -------------------------------------------- |
 | [Extensions](docs/extensions.md)                 | Tools and slash commands each extension adds |
+| [Web search and fetch](docs/web-search.md)       | Search, fetch, pagination, and safety limits |
 | [Subagent tool](docs/subagent-tool.md)           | Single, parallel, and chained task examples  |
 | [Agent inspector](docs/agent-inspector.md)       | Inspect running and completed agent runs     |
 | [Agent definitions](docs/agent-definitions.md)   | Agent files, built-in agents, AGENTS example |
@@ -73,6 +74,8 @@ tb-pi-package/
 │   └── web-search/      # web_search & web_fetch tools
 │       └── index.ts
 ├── prompts/             # Workflow prompt templates
+├── skills/web-search/   # Web search guidance for the model
+│   └── SKILL.md
 ├── .github/             # Issue/PR templates and release workflow
 ├── package.json
 └── tsconfig.json

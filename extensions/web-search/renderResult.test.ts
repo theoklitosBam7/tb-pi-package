@@ -147,6 +147,32 @@ describe("web-search tool result rendering", () => {
     expect(output).not.toContain("to expand");
   });
 
+  it("shows a download cap and strips terminal controls from remote output", () => {
+    const tools = registerTools();
+    const result = {
+      content: [{ type: "text", text: "URL: https://example.com/\u001b[31m\n\nPage\u0007" }],
+      details: {
+        url: "https://example.com/\u001b[31m",
+        offset: 0,
+        totalLength: 4,
+        chunkLength: 4,
+        downloadTruncated: true,
+      },
+    };
+    for (const expanded of [true, false]) {
+      const output = renderResult(tools.web_fetch, result, { expanded });
+      expect(output).not.toContain("\u001b[31m");
+      expect(output).not.toContain("\u0007");
+      if (!expanded) expect(output).toContain("download cap reached");
+    }
+    const search = renderResult(
+      tools.web_search,
+      { content: [{ type: "text", text: "Title\u001b[31m" }], details: { results: [] } },
+      { expanded: true },
+    );
+    expect(search).not.toContain("\u001b[31m");
+  });
+
   it("falls back when web_fetch details are missing", () => {
     const tools = registerTools();
     const result = {
