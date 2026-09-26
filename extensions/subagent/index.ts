@@ -942,19 +942,6 @@ export default function (pi: ExtensionAPI) {
           startedAt: options.startedAt,
         });
 
-      let overrides: AgentOverridesSnapshot;
-      try {
-        overrides = loadAgentOverrides();
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Unable to load subagent overrides.";
-        return {
-          content: [{ type: "text", text: message }],
-          details: makeDetails(requestedMode)([]),
-          isError: true,
-        };
-      }
-
       if (modeCount !== 1) {
         const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
         return {
@@ -965,6 +952,77 @@ export default function (pi: ExtensionAPI) {
             },
           ],
           details: makeDetails("single")([]),
+        };
+      }
+
+      let overrides: AgentOverridesSnapshot;
+      try {
+        overrides = loadAgentOverrides();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to load subagent overrides.";
+        const requestedTasks =
+          hasTasks && params.tasks
+            ? params.tasks
+            : hasChain && params.chain
+              ? params.chain.slice(0, 1)
+              : [
+                  {
+                    agent: params.agent,
+                    subagent_type: params.subagent_type,
+                    task: params.task ?? "",
+                  },
+                ];
+        const results: SingleResult[] = [];
+        for (const [index, requested] of requestedTasks.entries()) {
+          const result: SingleResult = {
+            agent: requested.agent || requested.subagent_type || "unknown",
+            agentSource: "unknown",
+            task: requested.task,
+            exitCode: 1,
+            messages: [],
+            stderr: message,
+            thinkingKind: "not-run",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: 0,
+              contextTokens: 0,
+              turns: 0,
+            },
+            ...(hasChain ? { step: index + 1 } : {}),
+          };
+          await persistResultArtifact({
+            result,
+            mode: requestedMode,
+            index: requestedMode === "single" ? undefined : index + 1,
+            taskLabel:
+              requestedMode === "single"
+                ? "single task"
+                : `${requestedMode === "chain" ? "chain step" : "parallel item"} ${index + 1}`,
+            startedAt: new Date().toISOString(),
+          });
+          results.push(result);
+        }
+        const summary =
+          requestedMode === "single"
+            ? formatSingleSummary(results[0], results[0].outputPath!)
+            : requestedMode === "chain"
+              ? `Chain stopped at step 1 (${results[0].agent}).\n${formatChainSummary(results)}`
+              : formatParallelSummary(
+                  results.map((result) => ({
+                    agent: result.agent,
+                    exitCode: result.exitCode,
+                    stopReason: result.stopReason,
+                    outputPath: result.outputPath!,
+                  })),
+                );
+        return {
+          content: [{ type: "text", text: summary }],
+          details: makeDetails(requestedMode)(results),
+          isError: true,
         };
       }
 

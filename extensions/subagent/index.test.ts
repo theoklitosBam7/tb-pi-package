@@ -766,6 +766,130 @@ describe("subagent execution options", () => {
     vi.mocked(spawn).mockReset();
   });
 
+  it("writes a not-run artifact when settings.json cannot be parsed", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-settings-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    fs.writeFileSync(path.join(project, "settings.json"), "{invalid json");
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const result = await tools.agent.execute(
+        "call-invalid-settings",
+        {
+          agent: "worker",
+          task: "should not run",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          model: undefined,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(result.isError).toBe(true);
+      expect(result.details?.results).toHaveLength(1);
+      expect(result.details.results[0].stderr).toContain("settings.json is not valid JSON");
+      expect(getResultOutput(result.details.results[0])).toContain("- Thinking: not run");
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+      vi.mocked(spawn).mockReset();
+    }
+  });
+
+  it("writes a not-run artifact for each parallel task when settings cannot load", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-parallel-settings-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    fs.writeFileSync(path.join(project, "settings.json"), "{invalid json");
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const result = await tools.agent.execute(
+        "call-invalid-parallel-settings",
+        {
+          tasks: [
+            { agent: "worker", task: "first task" },
+            { agent: "worker", task: "second task" },
+          ],
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          model: undefined,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(result.isError).toBe(true);
+      expect(result.details?.mode).toBe("parallel");
+      expect(result.details?.results).toHaveLength(2);
+      for (const item of result.details.results) {
+        expect(getResultOutput(item)).toContain("- Thinking: not run");
+        expect(item.stderr).toContain("settings.json is not valid JSON");
+        expect(result.content[0].text).toContain(item.outputPath);
+      }
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+      vi.mocked(spawn).mockReset();
+    }
+  });
+
+  it("stops a chain at its first not-run step when settings cannot load", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-chain-settings-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    fs.writeFileSync(path.join(project, "settings.json"), "{invalid json");
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const result = await tools.agent.execute(
+        "call-invalid-chain-settings",
+        {
+          chain: [
+            { agent: "worker", task: "first step" },
+            { agent: "worker", task: "second step" },
+          ],
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          model: undefined,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(result.isError).toBe(true);
+      expect(result.details?.mode).toBe("chain");
+      expect(result.details?.results).toHaveLength(1);
+      expect(result.details.results[0].step).toBe(1);
+      expect(getResultOutput(result.details.results[0])).toContain("- Thinking: not run");
+      expect(result.content[0].text).toContain(result.details.results[0].outputPath);
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+      vi.mocked(spawn).mockReset();
+    }
+  });
+
   it("reports frontmatter and settings errors before spawning", async () => {
     const project = createPersistenceTestProject(
       "invalid-agent-config-",
