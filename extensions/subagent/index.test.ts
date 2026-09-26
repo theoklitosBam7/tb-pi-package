@@ -223,6 +223,7 @@ describe("writeResultArtifact", () => {
         turns: 0,
       },
       model: "anthropic/claude-sonnet-4-5",
+      thinking: "medium",
     };
 
     try {
@@ -236,6 +237,7 @@ describe("writeResultArtifact", () => {
       const artifact = fs.readFileSync(outputPath, "utf8");
       expect(artifact).toContain("- Status: completed");
       expect(artifact).toContain("- Model: anthropic/claude-sonnet-4-5");
+      expect(artifact).toContain("- Thinking: medium");
       expect(artifact).toContain("- Task: parallel item 2");
       expect(artifact).toContain("## Result\n\n# Finding\n\nComplete output.");
       expect(artifact).not.toContain("## Failure diagnostics");
@@ -279,6 +281,7 @@ describe("writeResultArtifact", () => {
 
       const artifact = fs.readFileSync(outputPath, "utf8");
       expect(artifact).toContain("- Status: aborted");
+      expect(artifact).toContain("- Thinking: Pi default");
       expect(artifact).toContain("- Stop reason: aborted");
       expect(artifact).toContain("## Result\n\npartial response");
       expect(artifact).toContain(

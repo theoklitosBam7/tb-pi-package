@@ -95,6 +95,7 @@ function formatArtifactMarkdown(options: {
   agent: string;
   status: "completed" | "failed" | "aborted";
   model?: string;
+  thinking?: SubagentThinkingLevel;
   exitCode: number;
   stopReason?: string;
   taskLabel: string;
@@ -110,6 +111,7 @@ function formatArtifactMarkdown(options: {
     `- Agent: ${options.agent}`,
     `- Status: ${options.status}`,
     `- Model: ${options.model ?? "unknown"}`,
+    `- Thinking: ${options.thinking ?? "Pi default"}`,
     `- Exit code: ${options.exitCode}`,
     ...(options.stopReason ? [`- Stop reason: ${options.stopReason}`] : []),
     `- Task: ${options.taskLabel}`,
@@ -249,6 +251,7 @@ export async function writeResultArtifact(options: {
     agent: result.agent,
     status,
     model: result.model,
+    thinking: result.thinking,
     exitCode: result.exitCode,
     stopReason: result.stopReason,
     taskLabel: options.taskLabel,

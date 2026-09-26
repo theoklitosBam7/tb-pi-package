@@ -456,6 +456,7 @@ async function runSingleAgent(
     agent: resolvedName,
     task,
     model: modelsToTry[0],
+    thinking: resolvedOptions.thinking,
   });
   inspectorRun?.setStopper(() => runAbortController.abort());
 

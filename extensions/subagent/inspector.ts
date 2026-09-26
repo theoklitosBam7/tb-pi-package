@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI, KeybindingsManager } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import type { SubagentThinkingLevel } from "./agents.js";
 
 const MAX_COMPLETED_RUNS = 50;
 const MAX_RUN_CHARS = 64_000;
@@ -52,6 +53,7 @@ interface AgentInspectorRun {
   agent: string;
   task: string;
   model?: string;
+  thinking?: SubagentThinkingLevel;
   status: AgentInspectorStatus;
   text: string;
   responses: InspectorResponse[];
@@ -111,12 +113,18 @@ export class AgentInspectorStore {
     return [...this.runs.values()].reverse();
   }
 
-  start(options: { agent: string; task: string; model?: string }): AgentInspectorRunHandle {
+  start(options: {
+    agent: string;
+    task: string;
+    model?: string;
+    thinking?: SubagentThinkingLevel;
+  }): AgentInspectorRunHandle {
     const run: AgentInspectorRun = {
       id: `run-${++this.sequence}`,
       agent: boundedTail(options.agent, 256),
       task: boundedTail(options.task, 4_000),
       model: options.model,
+      thinking: options.thinking,
       status: "running",
       text: "",
       responses: [],
@@ -507,6 +515,7 @@ export class AgentInspectorComponent {
   private detailLines(run: AgentInspectorRun, width: number): string[] {
     const lines: string[] = [];
     if (run.model) lines.push(`${this.theme.fg("muted", "Model:")} ${run.model}`);
+    lines.push(`${this.theme.fg("muted", "Thinking:")} ${run.thinking ?? "Pi default"}`);
     lines.push(this.theme.fg("muted", "Task:"), ...run.task.split("\n"));
     if (run.activityTruncated) lines.push(this.theme.fg("warning", ACTIVITY_NOTICE));
     const activity = [
