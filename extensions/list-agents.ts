@@ -34,7 +34,7 @@ export interface AgentDefinition {
   effectiveModel?: string;
   effectiveModelSource: EffectiveModelSource;
   thinking?: SubagentThinkingLevel;
-  thinkingSource?: "settings" | "frontmatter";
+  thinkingSource?: "tool" | "settings" | "frontmatter";
   systemPromptOverridden: boolean;
   configError?: string;
   subagentType?: string;

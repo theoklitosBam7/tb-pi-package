@@ -249,7 +249,7 @@ describe("resolveAgentOptions", () => {
           tools: ["write"],
           systemPrompt: "",
         },
-        { modelOverride: "tool/model", parentModel: "parent/model" },
+        { modelOverride: "tool/model", parentModel: "parent/model", parentThinking: "off" },
       ),
     ).toEqual({
       modelsToTry: ["tool/model", "settings/model", "frontmatter/model", "parent/model"],
@@ -264,7 +264,9 @@ describe("resolveAgentOptions", () => {
   });
 
   it("uses frontmatter thinking and tools when settings do not override them", () => {
-    expect(resolveAgentOptions(reviewerAgent, undefined)).toMatchObject({
+    expect(
+      resolveAgentOptions(reviewerAgent, undefined, { parentThinking: "xhigh" }),
+    ).toMatchObject({
       thinking: "low",
       thinkingSource: "frontmatter",
       tools: ["read", "rg"],

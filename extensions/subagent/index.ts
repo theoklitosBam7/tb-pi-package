@@ -398,6 +398,8 @@ async function runSingleAgent(
   overrides: AgentOverridesSnapshot,
   modelOverride?: string, // Model from tool input, takes priority
   mainAgentModel?: string, // Fallback: main agent's current model
+  mainAgentThinking?: SubagentThinkingLevel, // Fallback: main agent's current thinking level
+  thinkingOverride?: SubagentThinkingLevel | "inherit",
   inspector?: AgentInspectorStore,
 ): Promise<SingleResult> {
   const resolution = resolveAgent(agents, agentName, subagentType);
@@ -453,7 +455,12 @@ async function runSingleAgent(
   const resolvedOptions = resolveAgentOptions(
     agent,
     overrideEntry?.kind === "valid" ? overrideEntry.value : undefined,
-    { modelOverride, parentModel: mainAgentModel },
+    {
+      modelOverride,
+      parentModel: mainAgentModel,
+      parentThinking: mainAgentThinking,
+      thinkingOverride,
+    },
   );
   const { modelsToTry } = resolvedOptions;
   const runAbortController = new AbortController();
@@ -738,6 +745,19 @@ async function runSingleAgent(
   }
 }
 
+const ThinkingInput = StringEnum(
+  ["off", "minimal", "low", "medium", "high", "xhigh", "max", "inherit"] as const,
+  {
+    description:
+      "Thinking level. 'inherit' uses the parent level. Overrides settings and frontmatter.",
+  },
+);
+
+const ModelInput = Type.String({
+  description:
+    "Model as provider/id, or 'inherit' for the parent model. Overrides settings and frontmatter.",
+});
+
 const TaskItem = Type.Object({
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
   subagent_type: Type.Optional(
@@ -748,12 +768,8 @@ const TaskItem = Type.Object({
   ),
   task: Type.String({ description: "Task to delegate to the agent" }),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-  model: Type.Optional(
-    Type.String({
-      description:
-        "Model to use (e.g., 'anthropic/claude-sonnet-4-20250514'). Overrides agent's frontmatter model.",
-    }),
-  ),
+  model: Type.Optional(ModelInput),
+  thinking: Type.Optional(ThinkingInput),
 });
 
 const ChainItem = Type.Object({
@@ -768,12 +784,8 @@ const ChainItem = Type.Object({
     description: "Task with optional {previous} placeholder for prior output",
   }),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
-  model: Type.Optional(
-    Type.String({
-      description:
-        "Model to use (e.g., 'anthropic/claude-sonnet-4-20250514'). Overrides agent's frontmatter model.",
-    }),
-  ),
+  model: Type.Optional(ModelInput),
+  thinking: Type.Optional(ThinkingInput),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -795,12 +807,8 @@ const SubagentParams = Type.Object({
     }),
   ),
   task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
-  model: Type.Optional(
-    Type.String({
-      description:
-        "Model to use (e.g., 'anthropic/claude-sonnet-4-20250514'). Overrides agent's frontmatter model.",
-    }),
-  ),
+  model: Type.Optional(ModelInput),
+  thinking: Type.Optional(ThinkingInput),
   tasks: Type.Optional(
     Type.Array(TaskItem, {
       description: "Array of {agent, task} for parallel execution",
@@ -891,6 +899,8 @@ export default function (pi: ExtensionAPI) {
       "Delegate tasks to specialized agents with isolated context.",
       "Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
       "Model priority: input model > settings override > agent frontmatter > main agent model.",
+      "Thinking priority: input thinking > settings override > agent frontmatter > main agent thinking.",
+      "Use model: 'inherit' and thinking: 'inherit' to select the parent values even when an agent has overrides.",
       "Each task returns a Markdown artifact path. Read the relevant file before continuing.",
       'Default agent scope is "user" (from ~/.pi/agent/agents).',
       'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
@@ -901,6 +911,7 @@ export default function (pi: ExtensionAPI) {
       const agentScope: AgentScope = params.agentScope ?? "user";
       // Get the main agent's current model as fallback (format: "provider/id")
       const mainAgentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const mainAgentThinking = pi.getThinkingLevel?.();
       const discovery = discoverAgents(ctx.cwd, agentScope);
       const agents = discovery.agents;
       const confirmProjectAgents = params.confirmProjectAgents ?? true;
@@ -1143,6 +1154,8 @@ export default function (pi: ExtensionAPI) {
             overrides,
             step.model ?? params.model, // step.model takes priority, then top-level params.model
             mainAgentModel,
+            mainAgentThinking,
+            step.thinking ?? params.thinking,
             inspector,
           );
           const previousResultOutput = getFinalOutput(result.messages);
@@ -1285,6 +1298,8 @@ export default function (pi: ExtensionAPI) {
               overrides,
               t.model ?? params.model, // task.model takes priority, then top-level params.model
               mainAgentModel,
+              mainAgentThinking,
+              t.thinking ?? params.thinking,
               inspector,
             );
             await persistResultArtifact({
@@ -1330,6 +1345,8 @@ export default function (pi: ExtensionAPI) {
           overrides,
           params.model, // top-level model for single mode
           mainAgentModel,
+          mainAgentThinking,
+          params.thinking,
           inspector,
         );
         await persistResultArtifact({
