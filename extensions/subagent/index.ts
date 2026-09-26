@@ -67,6 +67,7 @@ import {
   getResultStatus,
   installAbortHandler,
   isCompletedResult,
+  type ResultThinking,
   type SingleResult,
   writeResultArtifact,
 } from "./result.js";
@@ -378,6 +379,11 @@ function markResultAborted(result: SingleResult): void {
   result.errorMessage = "Agent was aborted";
 }
 
+function resolveResultThinking(thinking: SubagentThinkingLevel | undefined): ResultThinking {
+  if (thinking === undefined) return { thinkingKind: "default" };
+  return { thinkingKind: "configured", thinking };
+}
+
 async function runSingleAgent(
   defaultCwd: string,
   agents: AgentConfig[],
@@ -404,6 +410,7 @@ async function runSingleAgent(
       exitCode: 1,
       messages: [],
       stderr: resolution.error,
+      thinkingKind: "not-run",
       usage: {
         input: 0,
         output: 0,
@@ -429,6 +436,7 @@ async function runSingleAgent(
       exitCode: 1,
       messages: [],
       stderr: configError,
+      thinkingKind: "not-run",
       usage: {
         input: 0,
         output: 0,
@@ -482,7 +490,7 @@ async function runSingleAgent(
         turns: 0,
       },
       model: model,
-      thinking: resolvedOptions.thinking,
+      ...resolveResultThinking(resolvedOptions.thinking),
       systemPromptOverridden: resolvedOptions.systemPromptOverridden,
       step,
     };
@@ -1164,6 +1172,7 @@ export default function (pi: ExtensionAPI) {
             exitCode: -1, // -1 = still running
             messages: [],
             stderr: "",
+            thinkingKind: "not-run",
             usage: {
               input: 0,
               output: 0,

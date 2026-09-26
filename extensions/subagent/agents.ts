@@ -8,6 +8,11 @@ import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
 export type SubagentThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export const DEFAULT_SUBAGENT_THINKING_LABEL = "Pi default";
+
+export function getSubagentThinkingLabel(thinking: SubagentThinkingLevel | undefined): string {
+  return thinking ?? DEFAULT_SUBAGENT_THINKING_LABEL;
+}
 
 export function parseSubagentThinkingLevel(value: unknown): SubagentThinkingLevel | undefined {
   switch (value) {

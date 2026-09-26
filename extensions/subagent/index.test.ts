@@ -20,6 +20,7 @@ import {
   getResultStatus,
   installAbortHandler,
   isCompletedResult,
+  type ResultThinking,
   type SingleResult,
   writeResultArtifact,
 } from "./result.js";
@@ -224,7 +225,37 @@ describe("writeResultArtifact", () => {
       },
       model: "anthropic/claude-sonnet-4-5",
       thinking: "medium",
+      thinkingKind: "configured",
     };
+    const acceptSingleResult = (value: SingleResult) => value;
+    const acceptResultThinking = (value: ResultThinking) => value;
+    // @ts-expect-error A not-run state cannot have a thinking value.
+    acceptResultThinking({ thinkingKind: "not-run", thinking: undefined });
+    // @ts-expect-error A result cannot have both a thinking level and a not-run state.
+    acceptSingleResult({ ...result, thinking: "high", thinkingKind: "not-run" });
+    // @ts-expect-error A not-run result cannot include thinking, even as undefined.
+    acceptSingleResult({
+      agent: "reviewer",
+      agentSource: "user",
+      task: "Review",
+      exitCode: 0,
+      messages: [],
+      stderr: "",
+      usage: result.usage,
+      thinkingKind: "not-run",
+      thinking: undefined,
+    });
+    // @ts-expect-error Every result must declare its thinking state.
+    const untaggedResult: SingleResult = {
+      agent: "reviewer",
+      agentSource: "user",
+      task: "Review",
+      exitCode: 0,
+      messages: [],
+      stderr: "",
+      usage: result.usage,
+    };
+    void untaggedResult;
 
     try {
       await writeResultArtifact({
@@ -251,9 +282,9 @@ describe("writeResultArtifact", () => {
   it("persists an aborted result privately and removes response messages from details", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-artifact-test-"));
     const outputPath = path.join(dir, "aborted.md");
-    const result = {
+    const result: SingleResult = {
       agent: "reviewer",
-      agentSource: "user" as const,
+      agentSource: "user",
       task: "Review",
       exitCode: 1,
       messages: [assistant("partial response")],
@@ -267,6 +298,7 @@ describe("writeResultArtifact", () => {
         contextTokens: 0,
         turns: 0,
       },
+      thinkingKind: "default",
       stopReason: "aborted",
       errorMessage: "Agent was aborted",
     };
@@ -297,9 +329,9 @@ describe("writeResultArtifact", () => {
   it("omits an absent error message section from failed artifacts", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-artifact-test-"));
     const outputPath = path.join(dir, "stderr-only.md");
-    const result = {
+    const result: SingleResult = {
       agent: "reviewer",
-      agentSource: "user" as const,
+      agentSource: "user",
       task: "Review",
       exitCode: 1,
       messages: [assistant("partial response")],
@@ -313,6 +345,7 @@ describe("writeResultArtifact", () => {
         contextTokens: 0,
         turns: 0,
       },
+      thinkingKind: "default",
     };
 
     try {
@@ -335,13 +368,14 @@ describe("writeResultArtifact", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-artifact-test-"));
     const outputPath = path.join(dir, "result.md");
     fs.mkdirSync(outputPath);
-    const result = {
+    const result: SingleResult = {
       agent: "reviewer",
-      agentSource: "user" as const,
+      agentSource: "user",
       task: "Review",
       exitCode: 0,
       messages: [assistant("done")],
       stderr: "",
+      thinkingKind: "default",
       usage: {
         input: 0,
         output: 0,
@@ -390,6 +424,7 @@ describe("artifact-backed rendering", () => {
         } as Message,
       ],
       stderr: "",
+      thinkingKind: "default",
       usage: {
         input: 0,
         output: 0,
@@ -724,6 +759,9 @@ describe("subagent execution options", () => {
     expect(spawn).not.toHaveBeenCalled();
     expect(result.isError).toBe(true);
     expect(result.details?.results[0].stderr).toContain("thinking must be one of");
+    const artifact = getResultOutput(result.details.results[0]);
+    expect(artifact).toContain("- Thinking: not run");
+    expect(artifact).not.toContain("- Thinking: Pi default");
     fs.rmSync(project, { recursive: true, force: true });
     vi.mocked(spawn).mockReset();
   });
