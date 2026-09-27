@@ -39,21 +39,25 @@ function context(mode: ExtensionContext["mode"], ui: Record<string, unknown>): E
   } as unknown as ExtensionContext;
 }
 
+type AskUserTestQuestion = Parameters<RegisteredAskUserTool["execute"]>[1]["questions"][number];
+type TestQuestionComponent = Component & { focused?: boolean };
+
 function tuiQuestion(
-  question: Parameters<RegisteredAskUserTool["execute"]>[1]["questions"][number],
+  question: AskUserTestQuestion | AskUserTestQuestion[],
   rows = 20,
   columns = 80,
+  onCreate?: (component: TestQuestionComponent) => void,
 ) {
   const terminal = { rows, columns };
   const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
     "tui.select.pageDown": "ctrl+n",
     "tui.select.pageUp": "ctrl+p",
   });
-  let component: (Component & { focused?: boolean }) | undefined;
+  const components: TestQuestionComponent[] = [];
   const custom = vi.fn(
     (factory: Parameters<ExtensionContext["ui"]["custom"]>[0], _options?: unknown) =>
       new Promise<unknown>((resolve) => {
-        component = factory(
+        const component = factory(
           { requestRender: vi.fn(), terminal } as unknown as TUI,
           {
             fg: (_color: string, text: string) => text,
@@ -62,24 +66,32 @@ function tuiQuestion(
           } as Theme,
           keybindings as unknown as AppKeybindingsManager,
           resolve,
-        ) as Component & { focused?: boolean };
+        ) as TestQuestionComponent;
+        components.push(component);
+        onCreate?.(component);
       }),
   );
+  const questions = Array.isArray(question) ? question : [question];
   const execution = registeredTool().execute(
     "preview-test",
-    { questions: [question] },
+    { questions },
     undefined,
     undefined,
     context("tui", { custom }),
   );
-  if (!component) throw new Error("question component was not created");
-  const view = component;
+  function firstComponent(): TestQuestionComponent {
+    const component = components[0];
+    if (!component) throw new Error("question component was not created");
+    return component;
+  }
   return {
     terminal,
     custom,
-    view,
+    get view() {
+      return firstComponent();
+    },
     execution,
-    render: (width = terminal.columns) => view.render(width).join("\n"),
+    render: (width = terminal.columns) => firstComponent().render(width).join("\n"),
   };
 }
 
@@ -514,62 +526,24 @@ describe("ask_user", () => {
   });
 
   it("returns to the option list when Esc leaves custom Other input", async () => {
-    type Component = {
-      render(width: number): string[];
-      handleInput(data: string): void;
-    };
-    type Factory = (
-      tui: unknown,
-      theme: unknown,
-      keybindings: unknown,
-      done: (value: unknown) => void,
-    ) => Component;
-
-    let component: Component | undefined;
-    const custom = vi.fn((factory: Factory) => {
-      return new Promise<unknown>((resolve) => {
-        component = factory(
-          { requestRender() {}, terminal: { rows: 20, columns: 80 } },
-          {
-            fg: (_color: string, text: string) => text,
-            bg: (_color: string, text: string) => text,
-            bold: (text: string) => text,
-          },
-          new KeybindingsManager(TUI_KEYBINDINGS),
-          resolve,
-        );
-      });
+    const ui = tuiQuestion({
+      id: "database",
+      question: "Which database should the migration target?",
+      options: [{ label: "PostgreSQL" }],
+      is_other: true,
     });
-    const tool = registeredTool();
 
-    const execution = tool.execute(
-      "call-other-back",
-      {
-        questions: [
-          {
-            id: "database",
-            question: "Which database should the migration target?",
-            options: [{ label: "PostgreSQL" }],
-            is_other: true,
-          },
-        ],
-      },
-      undefined,
-      undefined,
-      context("tui", { custom }),
-    );
+    await vi.waitFor(() => expect(ui.custom).toHaveBeenCalledTimes(1));
+    ui.view.handleInput?.("\x1b[B");
+    ui.view.handleInput?.("\r");
+    expect(ui.render()).toContain("Esc to go back");
 
-    await vi.waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
-    component?.handleInput("\x1b[B");
-    component?.handleInput("\r");
-    expect(component?.render(80).join("\n")).toContain("Esc to go back");
+    ui.view.handleInput?.("\x1b");
+    expect(ui.render()).toContain("PostgreSQL");
+    expect(ui.render()).toContain("Esc cancel");
 
-    component?.handleInput("\x1b");
-    expect(component?.render(80).join("\n")).toContain("PostgreSQL");
-    expect(component?.render(80).join("\n")).toContain("Esc cancel");
-
-    component?.handleInput("\x1b");
-    await expect(execution).resolves.toMatchObject({
+    ui.view.handleInput?.("\x1b");
+    await expect(ui.execution).resolves.toMatchObject({
       details: { status: "cancelled", cancelled: true, answers: {} },
     });
   });
@@ -696,62 +670,24 @@ describe("ask_user", () => {
   });
 
   it("collects a custom TUI answer through the questionnaire component", async () => {
-    type Component = {
-      render(width: number): string[];
-      handleInput(data: string): void;
-    };
-    type Factory = (
-      tui: unknown,
-      theme: unknown,
-      keybindings: unknown,
-      done: (value: unknown) => void,
-    ) => Component;
-
-    let component: Component | undefined;
-    const custom = vi.fn((factory: Factory) => {
-      return new Promise<unknown>((resolve) => {
-        component = factory(
-          { requestRender() {}, terminal: { rows: 20, columns: 80 } },
-          {
-            fg: (_color: string, text: string) => text,
-            bg: (_color: string, text: string) => text,
-            bold: (text: string) => text,
-          },
-          new KeybindingsManager(TUI_KEYBINDINGS),
-          resolve,
-        );
-      });
+    const ui = tuiQuestion({
+      id: "notes",
+      header: "Notes",
+      question: "Anything else to consider?",
+      options: [{ label: "No additional notes", description: "Keep the defaults" }],
+      is_other: true,
     });
-    const tool = registeredTool();
 
-    const execution = tool.execute(
-      "call-4",
-      {
-        questions: [
-          {
-            id: "notes",
-            header: "Notes",
-            question: "Anything else to consider?",
-            options: [{ label: "No additional notes", description: "Keep the defaults" }],
-            is_other: true,
-          },
-        ],
-      },
-      undefined,
-      undefined,
-      context("tui", { custom }),
-    );
+    await vi.waitFor(() => expect(ui.custom).toHaveBeenCalledTimes(1));
+    expect(ui.render()).toContain("Anything else to consider?");
+    expect(ui.render()).toContain("Keep the defaults");
 
-    await vi.waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
-    expect(component?.render(80).join("\n")).toContain("Anything else to consider?");
-    expect(component?.render(80).join("\n")).toContain("Keep the defaults");
+    ui.view.handleInput?.("\x1b[B");
+    ui.view.handleInput?.("\r");
+    for (const character of "Use a rollback plan") ui.view.handleInput?.(character);
+    ui.view.handleInput?.("\r");
 
-    component?.handleInput("\x1b[B");
-    component?.handleInput("\r");
-    for (const character of "Use a rollback plan") component?.handleInput(character);
-    component?.handleInput("\r");
-
-    const result = await execution;
+    const result = await ui.execution;
     expect(result.details).toEqual({
       status: "completed",
       cancelled: false,
@@ -762,56 +698,18 @@ describe("ask_user", () => {
   });
 
   it("labels the custom choice distinctly when a declared option is named Other", async () => {
-    type Component = {
-      render(width: number): string[];
-      handleInput(data: string): void;
-    };
-    type Factory = (
-      tui: unknown,
-      theme: unknown,
-      keybindings: unknown,
-      done: (value: unknown) => void,
-    ) => Component;
-
-    let component: Component | undefined;
-    const custom = vi.fn((factory: Factory) => {
-      return new Promise<unknown>((resolve) => {
-        component = factory(
-          { requestRender() {}, terminal: { rows: 20, columns: 80 } },
-          {
-            fg: (_color: string, text: string) => text,
-            bg: (_color: string, text: string) => text,
-            bold: (text: string) => text,
-          },
-          new KeybindingsManager(TUI_KEYBINDINGS),
-          resolve,
-        );
-      });
+    const ui = tuiQuestion({
+      id: "follow_up",
+      question: "Should I follow up with the team?",
+      options: [{ label: "Other" }],
+      is_other: true,
     });
-    const tool = registeredTool();
 
-    const execution = tool.execute(
-      "call-other-tui",
-      {
-        questions: [
-          {
-            id: "follow_up",
-            question: "Should I follow up with the team?",
-            options: [{ label: "Other" }],
-            is_other: true,
-          },
-        ],
-      },
-      undefined,
-      undefined,
-      context("tui", { custom }),
-    );
+    await vi.waitFor(() => expect(ui.custom).toHaveBeenCalledTimes(1));
+    expect(ui.render()).toContain("Other (custom answer)");
 
-    await vi.waitFor(() => expect(custom).toHaveBeenCalledTimes(1));
-    expect(component?.render(80).join("\n")).toContain("Other (custom answer)");
-
-    component?.handleInput("\r");
-    const result = await execution;
+    ui.view.handleInput?.("\r");
+    const result = await ui.execution;
     expect(result.details).toEqual({
       status: "completed",
       cancelled: false,
@@ -822,58 +720,31 @@ describe("ask_user", () => {
   });
 
   it("opens TUI questions one at a time", async () => {
-    type Component = {
-      render(width: number): string[];
-      handleInput(data: string): void;
-    };
-    type Factory = (
-      tui: unknown,
-      theme: unknown,
-      keybindings: unknown,
-      done: (value: unknown) => void,
-    ) => Component;
-
     const renderedQuestions: string[] = [];
-    const custom = vi.fn((factory: Factory) => {
-      return new Promise<unknown>((resolve) => {
-        const component = factory(
-          { requestRender() {}, terminal: { rows: 20, columns: 80 } },
-          {
-            fg: (_color: string, text: string) => text,
-            bg: (_color: string, text: string) => text,
-            bold: (text: string) => text,
-          },
-          new KeybindingsManager(TUI_KEYBINDINGS),
-          resolve,
-        );
+    const ui = tuiQuestion(
+      [
+        {
+          id: "first",
+          question: "First question?",
+          options: [{ label: "First answer" }],
+        },
+        {
+          id: "second",
+          question: "Second question?",
+          options: [{ label: "Second answer" }],
+        },
+      ],
+      20,
+      80,
+      (component) => {
         renderedQuestions.push(component.render(80).join("\n"));
-        component.handleInput("\r");
-      });
-    });
-    const tool = registeredTool();
-
-    const result = await tool.execute(
-      "call-5",
-      {
-        questions: [
-          {
-            id: "first",
-            question: "First question?",
-            options: [{ label: "First answer" }],
-          },
-          {
-            id: "second",
-            question: "Second question?",
-            options: [{ label: "Second answer" }],
-          },
-        ],
+        component.handleInput?.("\r");
       },
-      undefined,
-      undefined,
-      context("tui", { custom }),
     );
 
-    expect(custom).toHaveBeenCalledTimes(2);
+    const result = await ui.execution;
+
+    expect(ui.custom).toHaveBeenCalledTimes(2);
     expect(renderedQuestions[0]).toContain("First question?");
     expect(renderedQuestions[1]).toContain("Second question?");
     expect(result.details).toEqual({

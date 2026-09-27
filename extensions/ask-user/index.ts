@@ -171,6 +171,14 @@ function createQuestionComponent(
   }
   const container = new Container();
 
+  function createQuestionHeader(): Text {
+    return new Text(theme.fg("accent", theme.bold(question.header ?? "Ask user")), 1, 0);
+  }
+
+  function createQuestionPrompt(): Text {
+    return new Text(theme.fg("text", question.question), 1, 0);
+  }
+
   function cancel(): void {
     finish({ kind: "cancelled" });
   }
@@ -184,10 +192,8 @@ function createQuestionComponent(
 
   function rebuild(): void {
     container.clear();
-    container.addChild(
-      new Text(theme.fg("accent", theme.bold(question.header ?? "Ask user")), 1, 0),
-    );
-    container.addChild(new Text(theme.fg("text", question.question), 1, 0));
+    container.addChild(createQuestionHeader());
+    container.addChild(createQuestionPrompt());
 
     if (inputMode) {
       container.addChild(new Text(theme.fg("muted", "Your answer:"), 1, 0));
@@ -253,12 +259,8 @@ function createQuestionComponent(
       const width = Math.max(3, outerWidth) - 2;
       if (inputMode) return frame(container.render(width), Math.max(3, outerWidth));
 
-      const header = new Text(
-        theme.fg("accent", theme.bold(question.header ?? "Ask user")),
-        1,
-        0,
-      ).render(width);
-      const prompt = new Text(theme.fg("text", question.question), 1, 0).render(width);
+      const header = createQuestionHeader().render(width);
+      const prompt = createQuestionPrompt().render(width);
       const footer = new Text(
         theme.fg(
           "dim",
