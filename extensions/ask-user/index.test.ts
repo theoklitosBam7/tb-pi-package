@@ -1,9 +1,17 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  KeybindingsManager as AppKeybindingsManager,
   Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import {
+  KeybindingsManager,
+  TUI_KEYBINDINGS,
+  visibleWidth,
+  type Component,
+  type TUI,
+} from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import askUser, { AskUserParameters, type AskUserDetails } from "./index.js";
 
@@ -31,7 +39,227 @@ function context(mode: ExtensionContext["mode"], ui: Record<string, unknown>): E
   } as unknown as ExtensionContext;
 }
 
+function tuiQuestion(
+  question: Parameters<RegisteredAskUserTool["execute"]>[1]["questions"][number],
+  rows = 20,
+  columns = 80,
+) {
+  const terminal = { rows, columns };
+  const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, {
+    "tui.select.pageDown": "ctrl+n",
+    "tui.select.pageUp": "ctrl+p",
+  });
+  let component: (Component & { focused?: boolean }) | undefined;
+  const custom = vi.fn(
+    (factory: Parameters<ExtensionContext["ui"]["custom"]>[0], _options?: unknown) =>
+      new Promise<unknown>((resolve) => {
+        component = factory(
+          { requestRender: vi.fn(), terminal } as unknown as TUI,
+          {
+            fg: (_color: string, text: string) => text,
+            bg: (_color: string, text: string) => `\x1b[48;5;236m${text}\x1b[49m`,
+            bold: (text: string) => text,
+          } as Theme,
+          keybindings as unknown as AppKeybindingsManager,
+          resolve,
+        ) as Component & { focused?: boolean };
+      }),
+  );
+  const execution = registeredTool().execute(
+    "preview-test",
+    { questions: [question] },
+    undefined,
+    undefined,
+    context("tui", { custom }),
+  );
+  if (!component) throw new Error("question component was not created");
+  const view = component;
+  return {
+    terminal,
+    custom,
+    view,
+    execution,
+    render: (width = terminal.columns) => view.render(width).join("\n"),
+  };
+}
+
 describe("ask_user", () => {
+  it("frames and fills the focused question in choice and text modes", async () => {
+    for (const question of [
+      { id: "choice", question: "Choose a release?", options: [{ label: "Rolling release" }] },
+      { id: "note", question: "Any notes?" },
+    ]) {
+      const ui = tuiQuestion(question, 12, 28);
+      const lines = ui.view.render(28);
+      expect(lines[0]).toContain("─");
+      expect(lines.at(-1)).toContain("─");
+      expect(lines.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│"))).toBe(
+        true,
+      );
+      expect(lines.slice(1, -1).every((line) => line.includes("\x1b[48;5;236m"))).toBe(true);
+      expect(lines.every((line) => visibleWidth(line) <= 28)).toBe(true);
+      expect(lines.length).toBeLessThanOrEqual(10);
+      ui.view.handleInput?.("\x1b");
+      await expect(ui.execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+    }
+  });
+  it("keeps long choice rows compact and wraps the full selected choice in a preview", async () => {
+    const label = "Deploy the application to the production cluster with rolling releases";
+    const description =
+      "Keep existing sessions alive while moving traffic gradually to the new version.";
+    const ui = tuiQuestion(
+      {
+        id: "deploy",
+        question: "Which deployment strategy should we use?",
+        options: [{ label, description }, { label: "Wait" }],
+      },
+      20,
+      34,
+    );
+
+    const lines = ui.view.render(34);
+    expect(lines.some((line) => line.includes("→ Deploy") && !line.includes("sessions"))).toBe(
+      true,
+    );
+    expect(ui.render()).toContain("Preview");
+    expect(ui.render()).toContain("production cluster");
+    expect(ui.render()).toContain("sessions alive");
+    expect(lines.every((line) => visibleWidth(line) <= 34)).toBe(true);
+    ui.view.handleInput?.("\r");
+    await expect(ui.execution).resolves.toMatchObject({
+      details: { answers: { deploy: { label, description } } },
+    });
+  });
+
+  it("scrolls the selected preview with configured page keys and resets on selection", async () => {
+    const ui = tuiQuestion(
+      {
+        id: "choice",
+        question: "Choose one?",
+        options: [
+          {
+            label: "First choice",
+            description:
+              "first line\nsecond line\nthird line\nfourth line\nfifth line\nsixth line\nseventh line\neighth line\nninth line\ntenth line\neleventh line",
+          },
+          { label: "Second choice" },
+        ],
+      },
+      12,
+      32,
+    );
+    expect(ui.render()).toContain("first line");
+    ui.view.handleInput?.("\x0e"); // ctrl+n, configured pageDown
+    expect(ui.render()).toContain("second line");
+    expect(ui.render()).not.toContain("first line");
+    for (let i = 0; i < 20; i++) ui.view.handleInput?.("\x0e");
+    const bottom = ui.render();
+    ui.view.handleInput?.("\x0e");
+    expect(ui.render()).toBe(bottom);
+    ui.view.handleInput?.("\x10"); // ctrl+p, configured pageUp
+    expect(ui.render()).not.toBe(bottom);
+    for (let i = 0; i < 20; i++) ui.view.handleInput?.("\x10");
+    expect(ui.render()).toContain("first line");
+    ui.view.handleInput?.("\x0e");
+    ui.render();
+    ui.view.handleInput?.("\x1b[B");
+    expect(ui.render()).toContain("Second choice");
+    expect(ui.render()).not.toContain("first line");
+    ui.view.handleInput?.("\x1b[A");
+    expect(ui.render()).toContain("first line");
+    expect(ui.render()).toContain("PgUp/PgDn");
+    ui.view.handleInput?.("\r");
+    await expect(ui.execution).resolves.toMatchObject({
+      details: { answers: { choice: { label: "First choice" } } },
+    });
+  });
+
+  it("shows a short Other preview and keeps editor Escape behavior", async () => {
+    const ui = tuiQuestion({
+      id: "choice",
+      question: "Choose one?",
+      options: [{ label: "Other" }],
+      is_other: true,
+    });
+    ui.render();
+    ui.view.handleInput?.("\x1b[B");
+    expect(ui.render()).toContain("Enter a custom answer");
+    ui.view.handleInput?.("\r");
+    expect(ui.render()).toContain("Esc to go back");
+    ui.view.handleInput?.("\x1b");
+    expect(ui.render()).toContain("Other (custom answer)");
+    ui.view.handleInput?.("\x1b");
+    await expect(ui.execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+  });
+
+  it("keeps the question and selected row visible on short screens and resize", async () => {
+    const ui = tuiQuestion(
+      {
+        id: "choice",
+        question: "Which environment should receive the release?",
+        options: Array.from({ length: 12 }, (_, i) => ({
+          label: `Target ${i} 界`,
+          description: "wide 界 text ".repeat(12),
+        })),
+      },
+      12,
+      24,
+    );
+    expect(ui.custom.mock.calls[0]?.[1]).toMatchObject({
+      overlay: true,
+      overlayOptions: { maxHeight: 24 },
+    });
+    for (let i = 0; i < 10; i++) ui.view.handleInput?.("\x1b[B");
+    for (const [rows, columns] of [
+      [12, 24],
+      [18, 16],
+      [10, 40],
+      [24, 50],
+    ]) {
+      ui.terminal.rows = rows;
+      ui.terminal.columns = columns;
+      const lines = ui.view.render(columns);
+      expect(lines.join("\n")).toContain("Which");
+      expect(lines.join("\n")).toContain("release?");
+      expect(lines.join("\n")).toContain("→ Target 10");
+      expect(lines.join("\n")).toContain("(11/12)");
+      expect(lines.length).toBeLessThanOrEqual(Math.min(24, rows - 2));
+      expect(lines.every((line) => visibleWidth(line) <= columns)).toBe(true);
+    }
+    ui.view.handleInput?.("\r");
+    await expect(ui.execution).resolves.toMatchObject({
+      details: { answers: { choice: { label: "Target 10 界" } } },
+    });
+  });
+
+  it("uses the last free row for preview instead of its heading", async () => {
+    const ui = tuiQuestion(
+      {
+        id: "one",
+        question: "Pick?",
+        options: [
+          { label: "First", description: "one line of useful detail" },
+          { label: "Second" },
+        ],
+      },
+      10,
+      40,
+    );
+    expect(ui.render()).toContain("First");
+    expect(ui.render().match(/First/g)?.length).toBe(2);
+    expect(ui.render()).not.toContain("Preview");
+    ui.view.handleInput?.("\x1b");
+    await expect(ui.execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+  });
+
+  it("keeps text-only questions free of choice previews", async () => {
+    const ui = tuiQuestion({ id: "note", question: "Any notes?" });
+    expect(ui.render()).toContain("Your answer:");
+    expect(ui.render()).not.toContain("Preview");
+    ui.view.handleInput?.("\x1b");
+    await expect(ui.execution).resolves.toMatchObject({ details: { status: "cancelled" } });
+  });
+
   it("does not crash when rendering a legacy result after reload", () => {
     const theme = {
       fg: (_color: string, text: string) => text,
@@ -304,9 +532,10 @@ describe("ask_user", () => {
           { requestRender() {}, terminal: { rows: 20, columns: 80 } },
           {
             fg: (_color: string, text: string) => text,
+            bg: (_color: string, text: string) => text,
             bold: (text: string) => text,
           },
-          {},
+          new KeybindingsManager(TUI_KEYBINDINGS),
           resolve,
         );
       });
@@ -485,9 +714,10 @@ describe("ask_user", () => {
           { requestRender() {}, terminal: { rows: 20, columns: 80 } },
           {
             fg: (_color: string, text: string) => text,
+            bg: (_color: string, text: string) => text,
             bold: (text: string) => text,
           },
-          {},
+          new KeybindingsManager(TUI_KEYBINDINGS),
           resolve,
         );
       });
@@ -550,9 +780,10 @@ describe("ask_user", () => {
           { requestRender() {}, terminal: { rows: 20, columns: 80 } },
           {
             fg: (_color: string, text: string) => text,
+            bg: (_color: string, text: string) => text,
             bold: (text: string) => text,
           },
-          {},
+          new KeybindingsManager(TUI_KEYBINDINGS),
           resolve,
         );
       });
@@ -609,9 +840,10 @@ describe("ask_user", () => {
           { requestRender() {}, terminal: { rows: 20, columns: 80 } },
           {
             fg: (_color: string, text: string) => text,
+            bg: (_color: string, text: string) => text,
             bold: (text: string) => text,
           },
-          {},
+          new KeybindingsManager(TUI_KEYBINDINGS),
           resolve,
         );
         renderedQuestions.push(component.render(80).join("\n"));
