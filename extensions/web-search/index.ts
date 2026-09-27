@@ -24,7 +24,7 @@ function boundedInteger(value: number, name: string, min: number, max: number): 
   return value;
 }
 
-export default function (pi: ExtensionAPI) {
+export default function (pi: Pick<ExtensionAPI, "registerTool">) {
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
@@ -188,7 +188,9 @@ async function webSearch(
   });
   if (res.downloadTruncated) throw new Error("Search page exceeded download cap");
   let results = parseDuckDuckGoResults(res.body, maxResults);
-  if (results.length === 0) {
+  const emptyHtml = isHtmlContentType(res.contentType) && !res.body.replace(/<[^>]*>/g, "").trim();
+  const challengeHtml = isHtmlContentType(res.contentType) && /captcha|challenge/i.test(res.body);
+  if (results.length === 0 && (emptyHtml || challengeHtml)) {
     const lite = await guardedRequest(
       `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
       {

@@ -141,12 +141,17 @@ export function pinnedTransportOptions(
   };
 }
 
-async function requestOnce(
-  url: URL,
-  address: string,
-  maxBytes: number,
-  signal: AbortSignal,
-): Promise<{
+async function requestOnce({
+  url,
+  address,
+  maxBytes,
+  signal,
+}: {
+  url: URL;
+  address: string;
+  maxBytes: number;
+  signal: AbortSignal;
+}): Promise<{
   response: IncomingMessage;
   contentType?: string;
   body: string;
@@ -239,12 +244,12 @@ export async function guardedRequest(url: string, options: RequestOptions): Prom
           const host = destination.hostname.replace(/^\[|\]$/g, "");
           const address = await approvedAddress(host);
           if (signal.aborted) throw failOnAbort();
-          const { response, contentType, body, downloadTruncated } = await requestOnce(
-            destination,
+          const { response, contentType, body, downloadTruncated } = await requestOnce({
+            url: destination,
             address,
-            options.maxBytes,
+            maxBytes: options.maxBytes,
             signal,
-          );
+          });
           const status = response.statusCode ?? 0;
           if ([301, 302, 303, 307, 308].includes(status)) {
             if (hop === MAX_REDIRECTS) throw new GuardedRequestError("Too many redirects");

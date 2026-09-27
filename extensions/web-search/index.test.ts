@@ -1,21 +1,53 @@
+import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import extension from "./index.js";
 import { guardedRequest } from "./guardedRequest.js";
 
 vi.mock("./guardedRequest.js", () => ({ guardedRequest: vi.fn() }));
 
-function tools() {
-  const registered: Record<string, any> = {};
+type RegisteredTool = Pick<ToolDefinition, "execute">;
+
+function tools(): Record<string, RegisteredTool> {
+  const registered: Record<string, RegisteredTool> = {};
   extension({
-    registerTool(tool: any) {
+    registerTool(tool) {
       registered[tool.name] = tool;
     },
-  } as any);
+  });
   return registered;
 }
 
-async function run(tool: any, params: Record<string, unknown>, signal?: AbortSignal) {
-  return tool.execute("test", params, signal, undefined, {});
+async function run(
+  tool: RegisteredTool,
+  params: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<AgentToolResult<unknown>> {
+  // The registered tools do not use ctx. Call with the arguments under test, then check the result.
+  const result: unknown = await Reflect.apply(tool.execute, undefined, ["test", params, signal]);
+  if (
+    typeof result !== "object" ||
+    result === null ||
+    !("content" in result) ||
+    !Array.isArray(result.content) ||
+    !result.content.every(
+      (item: unknown) =>
+        typeof item === "object" &&
+        item !== null &&
+        "type" in item &&
+        item.type === "text" &&
+        "text" in item &&
+        typeof item.text === "string",
+    )
+  ) {
+    throw new Error("Expected text tool result");
+  }
+  return { content: result.content, details: "details" in result ? result.details : undefined };
+}
+
+function resultText(result: AgentToolResult<unknown>): string {
+  const content = result.content[0];
+  if (!content || content.type !== "text") throw new Error("Expected text result");
+  return content.text;
 }
 
 describe("web-search tool execution", () => {
@@ -74,9 +106,7 @@ describe("web-search tool execution", () => {
         body: "<html></html>",
         downloadTruncated: false,
       });
-    expect((await run(tools().web_search, { query: "none" })).content[0].text).toBe(
-      "No results found.",
-    );
+    expect(resultText(await run(tools().web_search, { query: "none" }))).toBe("No results found.");
     expect(guardedRequest).toHaveBeenCalledTimes(2);
     expect(vi.mocked(guardedRequest).mock.calls[1][1].allowedHosts).toEqual([
       "lite.duckduckgo.com",
@@ -84,6 +114,48 @@ describe("web-search tool execution", () => {
     vi.mocked(guardedRequest).mockReset().mockRejectedValueOnce(new Error("HTTP 429"));
     await expect(run(tools().web_search, { query: "rate limit" })).rejects.toThrow("HTTP 429");
     expect(guardedRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("tries Lite for a challenge page", async () => {
+    vi.mocked(guardedRequest)
+      .mockReset()
+      .mockResolvedValueOnce({
+        url: "https://html.duckduckgo.com/html/",
+        status: 200,
+        contentType: "text/html",
+        body: "<html><body>Please complete the CAPTCHA challenge.</body></html>",
+        downloadTruncated: false,
+      })
+      .mockResolvedValueOnce({
+        url: "https://lite.duckduckgo.com/lite/",
+        status: 200,
+        contentType: "text/html",
+        body: '<tr><td><a class="result-link" href="https://example.com/">Example</a></td></tr>',
+        downloadTruncated: false,
+      });
+    const result = await run(tools().web_search, { query: "example" });
+    expect(result.details).toMatchObject({
+      results: [{ title: "Example", url: "https://example.com/", snippet: "" }],
+    });
+  });
+
+  it("does not try Lite for non-HTML or ordinary no-results HTML", async () => {
+    for (const response of [
+      { contentType: "application/json", body: '{"error":"unavailable"}' },
+      { contentType: "text/html", body: "<html><body>No results found.</body></html>" },
+    ]) {
+      vi.mocked(guardedRequest)
+        .mockReset()
+        .mockResolvedValueOnce({
+          url: "https://html.duckduckgo.com/html/",
+          status: 200,
+          ...response,
+          downloadTruncated: false,
+        });
+      const result = await run(tools().web_search, { query: "not found" });
+      expect(resultText(result)).toBe("No results found.");
+      expect(guardedRequest).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("keeps cancellation and Lite failure distinct from empty results", async () => {
@@ -115,8 +187,8 @@ describe("web-search tool execution", () => {
     });
     const result = await run(tools().web_fetch, { url: "https://example.com/start" });
     expect(result.details).toMatchObject({ title: "Page title", url: "https://example.com/final" });
-    expect(result.content[0].text).toContain("Body");
-    expect(result.content[0].text).not.toContain("# Page title");
+    expect(resultText(result)).toContain("Body");
+    expect(resultText(result)).not.toContain("# Page title");
   });
 
   it("paginates only within the downloaded prefix and identifies the cap", async () => {
@@ -140,7 +212,7 @@ describe("web-search tool execution", () => {
       truncated: false,
       downloadTruncated: true,
     });
-    expect(result.content[0].text).toContain("download cap");
-    expect(result.content[0].text).not.toContain("offset=6 to continue");
+    expect(resultText(result)).toContain("download cap");
+    expect(resultText(result)).not.toContain("offset=6 to continue");
   });
 });

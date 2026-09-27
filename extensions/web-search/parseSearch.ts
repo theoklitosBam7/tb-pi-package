@@ -96,7 +96,7 @@ function collect(root: HtmlNode, predicate: (node: HtmlNode) => boolean): HtmlNo
   return found;
 }
 
-function text(node: HtmlNode): string {
+function normalizedNodeText(node: HtmlNode): string {
   return rawText(node).replace(/\s+/g, " ").trim();
 }
 
@@ -128,10 +128,10 @@ function resultUrl(href: string | undefined): string | undefined {
 }
 
 function makeResult(link: HtmlNode, snippet?: HtmlNode): SearchResult | undefined {
-  const title = text(link);
+  const title = normalizedNodeText(link);
   const url = resultUrl(link.attributes.href);
   if (!title || !url) return undefined;
-  return { title, url, snippet: snippet ? text(snippet) : "" };
+  return { title, url, snippet: snippet ? normalizedNodeText(snippet) : "" };
 }
 
 export function parseDuckDuckGoResults(html: string, max: number): SearchResult[] {
@@ -158,7 +158,7 @@ export function parseLiteResults(html: string, max: number): SearchResult[] {
       pending = makeResult(link);
     }
     const snippet = collect(row, (node) => hasClass(node, "result-snippet"))[0];
-    if (pending && snippet) pending.snippet = text(snippet);
+    if (pending && snippet) pending.snippet = normalizedNodeText(snippet);
   }
   if (pending && results.length < max) results.push(pending);
   return results;
