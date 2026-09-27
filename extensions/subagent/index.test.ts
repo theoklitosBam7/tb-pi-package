@@ -676,6 +676,17 @@ function registerPersistenceTestTools(thinkingLevel?: "off" | "xhigh"): Record<s
   return tools;
 }
 
+describe("subagent tool guidance", () => {
+  it("tells callers to omit model and thinking unless the user requests an override", () => {
+    const tools = registerPersistenceTestTools();
+
+    expect(tools.agent.description).toContain(
+      "Omit model and thinking by default; set either only when the user explicitly requests an override.",
+    );
+    expect(tools.agent.description).toContain("'inherit' is an explicit override");
+  });
+});
+
 describe("subagent execution options", () => {
   it("uses explicit parent model and thinking instead of scout settings", async () => {
     const project = createPersistenceTestProject(

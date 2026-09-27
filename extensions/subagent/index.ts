@@ -898,6 +898,8 @@ export default function (pi: ExtensionAPI) {
     description: [
       "Delegate tasks to specialized agents with isolated context.",
       "Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+      "Omit model and thinking by default; set either only when the user explicitly requests an override.",
+      "'inherit' is an explicit override, not the default.",
       "Model priority: input model > settings override > agent frontmatter > main agent model.",
       "Thinking priority: input thinking > settings override > agent frontmatter > main agent thinking.",
       "Use model: 'inherit' and thinking: 'inherit' to select the parent values even when an agent has overrides.",
