@@ -191,6 +191,20 @@ describe("web-search tool execution", () => {
     expect(resultText(result)).not.toContain("# Page title");
   });
 
+  it("refuses a search page limited by decoded bytes", async () => {
+    vi.mocked(guardedRequest).mockReset().mockResolvedValueOnce({
+      url: "https://html.duckduckgo.com/html/",
+      status: 200,
+      contentType: "text/html",
+      body: "<p>partial result</p>",
+      downloadTruncated: true,
+    });
+    await expect(run(tools().web_search, { query: "test" })).rejects.toThrow(
+      "Search page exceeded download cap",
+    );
+    expect(guardedRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("paginates only within the downloaded prefix and identifies the cap", async () => {
     vi.mocked(guardedRequest).mockReset().mockResolvedValue({
       url: "https://example.com/page",
