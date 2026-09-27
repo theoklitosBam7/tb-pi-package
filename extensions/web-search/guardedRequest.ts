@@ -2,6 +2,9 @@ import { resolve4, resolve6 } from "node:dns/promises";
 import type { IncomingMessage } from "node:http";
 import { request as httpsRequest, type RequestOptions as HttpsRequestOptions } from "node:https";
 import { isIP } from "node:net";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 
 const DEADLINE_MS = 15_000;
 const MAX_REDIRECTS = 10;
@@ -109,6 +112,63 @@ function abortError(signal?: AbortSignal): Error {
   return error;
 }
 
+async function readCompressedBody(
+  response: IncomingMessage,
+  maxBytes: number,
+  signal: AbortSignal,
+  encoding: "gzip" | "br" | "deflate",
+): Promise<{ body: Buffer; downloadTruncated: boolean }> {
+  let wireSize = 0;
+  let wireLimitReached = false;
+  const wireLimit = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      wireSize += chunk.length;
+      if (wireSize > maxBytes) {
+        wireLimitReached = true;
+        callback(new Error("Compressed download limit reached"));
+      } else {
+        callback(null, chunk);
+      }
+    },
+  });
+  const decompressor =
+    encoding === "gzip"
+      ? createGunzip()
+      : encoding === "br"
+        ? createBrotliDecompress()
+        : createInflate();
+  const completed = pipeline(response, wireLimit, decompressor, { signal });
+  // A decoded prefix stops the pipeline early; its close error is expected.
+  void completed.catch(() => {});
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let downloadTruncated = false;
+  try {
+    for await (const chunk of decompressor) {
+      const bytes: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const remaining = maxBytes - size;
+      chunks.push(bytes.subarray(0, remaining));
+      size += Math.min(bytes.length, remaining);
+      if (size === maxBytes) {
+        downloadTruncated = true;
+        break;
+      }
+    }
+    if (!downloadTruncated) await completed;
+  } catch {
+    throw new GuardedRequestError(
+      wireLimitReached ? "Compressed download limit reached" : "Invalid compressed response",
+    );
+  } finally {
+    if (downloadTruncated) {
+      response.destroy();
+      decompressor.destroy();
+      await completed.catch(() => {});
+    }
+  }
+  return { body: Buffer.concat(chunks, size), downloadTruncated };
+}
+
 function acceptedContentType(header: string): boolean {
   const mime = header.split(";", 1)[0].trim().toLowerCase();
   return (
@@ -177,8 +237,13 @@ async function requestOnce({
     response.destroy();
     throw new GuardedRequestError("Unsupported or missing content type");
   }
-  const encoding = response.headers["content-encoding"];
-  if (encoding && encoding !== "identity") {
+  const encodingHeader = response.headers["content-encoding"];
+  const encoding =
+    typeof encodingHeader === "string" ? encodingHeader.trim().toLowerCase() : undefined;
+  if (
+    encodingHeader !== undefined &&
+    !["identity", "gzip", "br", "deflate"].includes(encoding ?? "")
+  ) {
     response.destroy();
     throw new GuardedRequestError("Unsupported content encoding");
   }
@@ -189,6 +254,15 @@ async function requestOnce({
   } catch {
     response.destroy();
     throw new GuardedRequestError("Unsupported charset");
+  }
+  if (encoding === "gzip" || encoding === "br" || encoding === "deflate") {
+    const result = await readCompressedBody(response, maxBytes, signal, encoding);
+    return {
+      response,
+      contentType,
+      body: decoder.decode(result.body),
+      downloadTruncated: result.downloadTruncated,
+    };
   }
   const chunks: Buffer[] = [];
   let size = 0;

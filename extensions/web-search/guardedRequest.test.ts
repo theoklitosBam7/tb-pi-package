@@ -8,6 +8,7 @@ import {
 } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { PassThrough } from "node:stream";
+import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:dns/promises", () => ({ resolve4: vi.fn(), resolve6: vi.fn() }));
@@ -200,10 +201,126 @@ describe("guardedRequest", () => {
     await expect(guardedRequest("https://example.com/", { maxBytes: 10 })).rejects.toThrow(
       /content type/i,
     );
-    reply(200, { "content-type": "text/plain", "content-encoding": "gzip" }, "data");
+    reply(200, { "content-type": "text/plain", "content-encoding": "zstd" }, "data");
     await expect(guardedRequest("https://example.com/", { maxBytes: 10 })).rejects.toThrow(
       /encoding/i,
     );
+  });
+
+  it("reads a gzip response that ignores the identity request", async () => {
+    reply(200, { "content-type": "text/plain", "content-encoding": "gzip" }, gzipSync("hello"));
+    expect(await guardedRequest("https://example.com/", { maxBytes: 100 })).toEqual({
+      url: "https://example.com/",
+      status: 200,
+      contentType: "text/plain",
+      body: "hello",
+      downloadTruncated: false,
+    });
+  });
+
+  it("reads a Brotli response with a case-insensitive encoding", async () => {
+    reply(
+      200,
+      { "content-type": "text/plain", "content-encoding": " Br " },
+      brotliCompressSync("hello"),
+    );
+    expect((await guardedRequest("https://example.com/", { maxBytes: 100 })).body).toBe("hello");
+  });
+
+  it("reads a deflate response before decoding its declared charset", async () => {
+    reply(
+      200,
+      { "content-type": "text/plain; charset=iso-8859-1", "content-encoding": "deflate" },
+      deflateSync(Buffer.from([0x63, 0x61, 0x66, 0xe9])),
+    );
+    expect((await guardedRequest("https://example.com/", { maxBytes: 100 })).body).toBe("café");
+  });
+
+  it("returns only a bounded decoded gzip prefix", async () => {
+    reply(
+      200,
+      { "content-type": "text/plain", "content-encoding": "gzip" },
+      gzipSync("a".repeat(100_000)),
+    );
+    expect(await guardedRequest("https://example.com/", { maxBytes: 256 })).toMatchObject({
+      body: "a".repeat(256),
+      downloadTruncated: true,
+    });
+    expect(opened[0].destroyed).toBe(true);
+  });
+
+  it("rejects compressed responses over the wire cap or with damaged frames", async () => {
+    reply(200, { "content-type": "text/plain", "content-encoding": "gzip" }, gzipSync("abc"));
+    await expect(guardedRequest("https://example.com/", { maxBytes: 10 })).rejects.toThrow(
+      "Compressed download limit reached",
+    );
+    reply(200, { "content-type": "text/plain", "content-encoding": "gzip" }, Buffer.from("bad"));
+    await expect(guardedRequest("https://example.com/", { maxBytes: 100 })).rejects.toThrow(
+      "Invalid compressed response",
+    );
+    reply(
+      200,
+      { "content-type": "text/plain", "content-encoding": "gzip" },
+      gzipSync("abc").subarray(0, -4),
+    );
+    await expect(guardedRequest("https://example.com/", { maxBytes: 100 })).rejects.toThrow(
+      "Invalid compressed response",
+    );
+    expect(opened.every((stream) => stream.destroyed)).toBe(true);
+  });
+
+  it("rejects stacked encodings but accepts an explicit identity", async () => {
+    for (const encoding of ["gzip, br", "", "gzip; q=1"]) {
+      reply(200, { "content-type": "text/plain", "content-encoding": encoding }, "bad");
+      await expect(guardedRequest("https://example.com/", { maxBytes: 100 })).rejects.toThrow(
+        /encoding/i,
+      );
+    }
+    reply(200, { "content-type": "text/plain", "content-encoding": " Identity " }, "ok");
+    expect((await guardedRequest("https://example.com/", { maxBytes: 100 })).body).toBe("ok");
+  });
+
+  it("marks an exact decoded gzip limit as truncated", async () => {
+    reply(200, { "content-type": "text/plain", "content-encoding": "gzip" }, gzipSync("hello"));
+    expect(await guardedRequest("https://example.com/", { maxBytes: 50 })).toMatchObject({
+      body: "hello",
+      downloadTruncated: false,
+    });
+    reply(200, { "content-type": "text/plain", "content-encoding": "gzip" }, gzipSync("hello"));
+    await expect(guardedRequest("https://example.com/", { maxBytes: 5 })).rejects.toThrow(
+      "Compressed download limit reached",
+    );
+    const text = "a".repeat(100);
+    reply(200, { "content-type": "text/plain", "content-encoding": "gzip" }, gzipSync(text));
+    expect(await guardedRequest("https://example.com/", { maxBytes: 100 })).toMatchObject({
+      body: text,
+      downloadTruncated: true,
+    });
+  });
+
+  it("stops a compressed body on cancellation and timeout", async () => {
+    for (const cause of ["cancel", "timeout"]) {
+      const deadline = new AbortController();
+      vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+      replies.push({
+        status: 200,
+        headers: { "content-type": "text/plain", "content-encoding": "gzip" },
+        hold: true,
+      });
+      const caller = new AbortController();
+      const pending = guardedRequest("https://example.com/", {
+        maxBytes: 100,
+        signal: caller.signal,
+      });
+      await vi.waitFor(() => expect(opened).toHaveLength(cause === "cancel" ? 1 : 2));
+      opened.at(-1)?.write(gzipSync("hello").subarray(0, 5));
+      if (cause === "cancel") caller.abort();
+      else deadline.abort();
+      await expect(pending).rejects.toMatchObject({
+        name: cause === "cancel" ? "AbortError" : "TimeoutError",
+      });
+      expect(opened.at(-1)?.destroyed).toBe(true);
+    }
   });
 
   it("decodes declared charsets and refuses unsupported labels", async () => {
