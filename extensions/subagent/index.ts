@@ -384,24 +384,43 @@ function resolveResultThinking(thinking: SubagentThinkingLevel | undefined): Res
   return { thinkingKind: "configured", thinking };
 }
 
-async function runSingleAgent(
-  defaultCwd: string,
-  agents: AgentConfig[],
-  agentName: string | undefined,
-  subagentType: string | undefined,
-  task: string,
-  cwd: string | undefined,
-  step: number | undefined,
-  signal: AbortSignal | undefined,
-  onUpdate: OnUpdateCallback | undefined,
-  makeDetails: (results: SingleResult[]) => SubagentDetails,
-  overrides: AgentOverridesSnapshot,
-  modelOverride?: string, // Model from tool input, takes priority
-  mainAgentModel?: string, // Fallback: main agent's current model
-  mainAgentThinking?: SubagentThinkingLevel, // Fallback: main agent's current thinking level
-  thinkingOverride?: SubagentThinkingLevel | "inherit",
-  inspector?: AgentInspectorStore,
-): Promise<SingleResult> {
+type RunSingleAgentOptions = {
+  defaultCwd: string;
+  agents: AgentConfig[];
+  agentName: string | undefined;
+  subagentType: string | undefined;
+  task: string;
+  cwd: string | undefined;
+  step: number | undefined;
+  signal: AbortSignal | undefined;
+  onUpdate: OnUpdateCallback | undefined;
+  makeDetails: (results: SingleResult[]) => SubagentDetails;
+  overrides: AgentOverridesSnapshot;
+  modelOverride?: string; // Model from tool input, takes priority
+  mainAgentModel?: string; // Fallback: main agent's current model
+  mainAgentThinking?: SubagentThinkingLevel; // Fallback: main agent's current thinking level
+  thinkingOverride?: SubagentThinkingLevel | "inherit";
+  inspector?: AgentInspectorStore;
+};
+
+async function runSingleAgent({
+  defaultCwd,
+  agents,
+  agentName,
+  subagentType,
+  task,
+  cwd,
+  step,
+  signal,
+  onUpdate,
+  makeDetails,
+  overrides,
+  modelOverride,
+  mainAgentModel,
+  mainAgentThinking,
+  thinkingOverride,
+  inspector,
+}: RunSingleAgentOptions): Promise<SingleResult> {
   const resolution = resolveAgent(agents, agentName, subagentType);
 
   if (resolution.error) {
@@ -1142,24 +1161,24 @@ export default function (pi: ExtensionAPI) {
             : undefined;
 
           const startedAt = new Date().toISOString();
-          const result = await runSingleAgent(
-            ctx.cwd,
+          const result = await runSingleAgent({
+            defaultCwd: ctx.cwd,
             agents,
-            step.agent,
-            step.subagent_type,
-            taskWithContext,
-            step.cwd,
-            i + 1,
+            agentName: step.agent,
+            subagentType: step.subagent_type,
+            task: taskWithContext,
+            cwd: step.cwd,
+            step: i + 1,
             signal,
-            chainUpdate,
-            makeDetails("chain"),
+            onUpdate: chainUpdate,
+            makeDetails: makeDetails("chain"),
             overrides,
-            step.model ?? params.model, // step.model takes priority, then top-level params.model
+            modelOverride: step.model ?? params.model, // step.model takes priority, then top-level params.model
             mainAgentModel,
             mainAgentThinking,
-            step.thinking ?? params.thinking,
+            thinkingOverride: step.thinking ?? params.thinking,
             inspector,
-          );
+          });
           const previousResultOutput = getFinalOutput(result.messages);
           await persistResultArtifact({
             result,
@@ -1280,30 +1299,29 @@ export default function (pi: ExtensionAPI) {
           MAX_CONCURRENCY,
           async (t, index) => {
             const startedAt = new Date().toISOString();
-            const result = await runSingleAgent(
-              ctx.cwd,
+            const result = await runSingleAgent({
+              defaultCwd: ctx.cwd,
               agents,
-              t.agent,
-              t.subagent_type,
-              t.task,
-              t.cwd,
-              undefined,
+              agentName: t.agent,
+              subagentType: t.subagent_type,
+              task: t.task,
+              cwd: t.cwd,
+              step: undefined,
               signal,
-              // Per-task update callback
-              (partial) => {
+              onUpdate: (partial) => {
                 if (partial.details?.results[0]) {
                   allResults[index] = partial.details.results[0];
                   emitParallelUpdate();
                 }
               },
-              makeDetails("parallel"),
+              makeDetails: makeDetails("parallel"),
               overrides,
-              t.model ?? params.model, // task.model takes priority, then top-level params.model
+              modelOverride: t.model ?? params.model, // task.model takes priority, then top-level params.model
               mainAgentModel,
               mainAgentThinking,
-              t.thinking ?? params.thinking,
+              thinkingOverride: t.thinking ?? params.thinking,
               inspector,
-            );
+            });
             await persistResultArtifact({
               result,
               mode: "parallel",
@@ -1333,24 +1351,24 @@ export default function (pi: ExtensionAPI) {
 
       if ((params.agent || params.subagent_type) && params.task) {
         const startedAt = new Date().toISOString();
-        const result = await runSingleAgent(
-          ctx.cwd,
+        const result = await runSingleAgent({
+          defaultCwd: ctx.cwd,
           agents,
-          params.agent,
-          params.subagent_type,
-          params.task,
-          params.cwd,
-          undefined,
+          agentName: params.agent,
+          subagentType: params.subagent_type,
+          task: params.task,
+          cwd: params.cwd,
+          step: undefined,
           signal,
           onUpdate,
-          makeDetails("single"),
+          makeDetails: makeDetails("single"),
           overrides,
-          params.model, // top-level model for single mode
+          modelOverride: params.model, // top-level model for single mode
           mainAgentModel,
           mainAgentThinking,
-          params.thinking,
+          thinkingOverride: params.thinking,
           inspector,
-        );
+        });
         await persistResultArtifact({
           result,
           mode: "single",
