@@ -112,12 +112,17 @@ function abortError(signal?: AbortSignal): Error {
   return error;
 }
 
-async function readCompressedBody(
-  response: IncomingMessage,
-  maxBytes: number,
-  signal: AbortSignal,
-  encoding: "gzip" | "br" | "deflate",
-): Promise<{ body: Buffer; downloadTruncated: boolean }> {
+async function readCompressedBody({
+  response,
+  maxBytes,
+  signal,
+  encoding,
+}: {
+  response: IncomingMessage;
+  maxBytes: number;
+  signal: AbortSignal;
+  encoding: "gzip" | "br" | "deflate";
+}): Promise<{ body: Buffer; downloadTruncated: boolean }> {
   let wireSize = 0;
   let wireLimitReached = false;
   const wireLimit = new Transform({
@@ -256,7 +261,7 @@ async function requestOnce({
     throw new GuardedRequestError("Unsupported charset");
   }
   if (encoding === "gzip" || encoding === "br" || encoding === "deflate") {
-    const result = await readCompressedBody(response, maxBytes, signal, encoding);
+    const result = await readCompressedBody({ response, maxBytes, signal, encoding });
     return {
       response,
       contentType,

@@ -8,7 +8,7 @@ The `web-search` extension adds `web_search` and `web_fetch`. Use search to find
 web_search({ "query": "IANA example domains", "max_results": 3 })
 ```
 
-`query` must not be empty. `max_results` is an integer from 1 to 20 and defaults to 8. Results contain a title, URL, and snippet. The tool uses DuckDuckGo's HTML endpoint and tries DuckDuckGo Lite only when that endpoint returns empty or challenge HTML. It does not try Lite after HTTP 403 or 429. Search-page downloads stop at 1 MiB; reaching that limit returns an error rather than partial results.
+`query` must not be empty. `max_results` is an integer from 1 to 20 and defaults to 8. Results contain a title, URL, and snippet. The tool uses DuckDuckGo's HTML endpoint and tries DuckDuckGo Lite only when that endpoint returns empty or challenge HTML. It does not try Lite after HTTP 403 or 429. Search reads at most 1 MiB of decoded content. For compressed responses, it also limits incoming compressed bytes to 1 MiB. Reaching the decoded cap returns an error rather than partial results. If compressed bytes exceed their cap first, the request fails with a size-limit error.
 
 ## Fetch and paginate
 

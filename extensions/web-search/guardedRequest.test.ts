@@ -1,3 +1,4 @@
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { resolve4, resolve6 } from "node:dns/promises";
 import { EventEmitter } from "node:events";
 import {
@@ -10,6 +11,7 @@ import { request as httpsRequest } from "node:https";
 import { PassThrough } from "node:stream";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import extension from "./index.js";
 
 vi.mock("node:dns/promises", () => ({ resolve4: vi.fn(), resolve6: vi.fn() }));
 vi.mock("node:http", () => ({ request: vi.fn() }));
@@ -68,6 +70,17 @@ function transport() {
   return call;
 }
 import { guardedRequest } from "./guardedRequest.js";
+
+function registeredTool(name: "web_search" | "web_fetch"): Pick<ToolDefinition, "execute"> {
+  let selected: Pick<ToolDefinition, "execute"> | undefined;
+  extension({
+    registerTool(tool) {
+      if (tool.name === name) selected = tool;
+    },
+  });
+  if (!selected) throw new Error(`${name} was not registered`);
+  return selected;
+}
 
 describe("guardedRequest", () => {
   beforeEach(() => {
@@ -278,6 +291,43 @@ describe("guardedRequest", () => {
     }
     reply(200, { "content-type": "text/plain", "content-encoding": " Identity " }, "ok");
     expect((await guardedRequest("https://example.com/", { maxBytes: 100 })).body).toBe("ok");
+  });
+
+  it("rejects compressed search content at its decoded cap", async () => {
+    reply(
+      200,
+      { "content-type": "text/html", "content-encoding": "gzip" },
+      gzipSync("a".repeat(1024 * 1024)),
+    );
+    await expect(
+      Reflect.apply(registeredTool("web_search").execute, undefined, ["test", { query: "test" }]),
+    ).rejects.toThrow("Search page exceeded download cap");
+    expect(opened).toHaveLength(1);
+    expect(opened[0].destroyed).toBe(true);
+  });
+
+  it("paginates a compressed fetch within its decoded prefix", async () => {
+    const cap = 5 * 1024 * 1024;
+    reply(
+      200,
+      { "content-type": "text/plain", "content-encoding": "gzip" },
+      gzipSync("a".repeat(cap - 3) + "endhidden"),
+    );
+    const result: unknown = await Reflect.apply(registeredTool("web_fetch").execute, undefined, [
+      "test",
+      { url: "https://example.com/", offset: cap - 3, max_length: 10 },
+    ]);
+    expect(result).toMatchObject({
+      details: {
+        totalLength: cap,
+        offset: cap - 3,
+        chunkLength: 3,
+        truncated: false,
+        downloadTruncated: true,
+      },
+      content: [{ text: expect.stringContaining("\n\nend\n\n[download cap reached") }],
+    });
+    expect(result).not.toMatchObject({ content: [{ text: expect.stringContaining("hidden") }] });
   });
 
   it("marks an exact decoded gzip limit as truncated", async () => {
