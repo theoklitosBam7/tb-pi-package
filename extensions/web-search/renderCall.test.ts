@@ -26,4 +26,22 @@ describe("web-search tool call rendering", () => {
         .join("\n"),
     ).toContain("https://example.com/docs");
   });
+
+  it("removes terminal controls from call arguments", () => {
+    const tools: Record<string, any> = {};
+    webSearchExtension({
+      registerTool(tool: any) {
+        tools[tool.name] = tool;
+      },
+    } as any);
+    const theme = { bold: (s: string) => s, fg: (_: string, s: string) => s };
+    for (const [tool, args] of [
+      [tools.web_search, { query: "safe\u001b[31mhidden\u0007" }],
+      [tools.web_fetch, { url: "https://example.com/\u001b[31m" }],
+    ] as const) {
+      const output = tool.renderCall(args, theme, {}).render(80).join("\n");
+      expect(output).not.toContain("\u001b");
+      expect(output).not.toContain("\u0007");
+    }
+  });
 });
