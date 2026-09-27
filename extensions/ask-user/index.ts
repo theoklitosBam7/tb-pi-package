@@ -2,10 +2,12 @@ import type {
   AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
+  KeybindingsManager,
   Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Box,
   Container,
   Editor,
   Key,
@@ -108,6 +110,7 @@ function createQuestionComponent(
   question: AskUserQuestion,
   tui: TUI,
   theme: Theme,
+  keybindings: KeybindingsManager,
   signal: AbortSignal | undefined,
   done: (result: QuestionInteraction) => void,
 ): Component & { focused: boolean; dispose?(): void } {
@@ -116,6 +119,9 @@ function createQuestionComponent(
   let inputMode = inputModeInitially;
   let finished = false;
   let focused = false;
+  let previewOffset = 0;
+  let previewPageSize = 0;
+  let previewLength = 0;
 
   const selectListTheme: SelectListTheme = {
     selectedPrefix: (text) => theme.fg("accent", text),
@@ -132,7 +138,6 @@ function createQuestionComponent(
   const optionItems: SelectItem[] = options.map((option, index) => ({
     value: `option:${index}`,
     label: option.label,
-    description: option.description,
   }));
   if (question.is_other) {
     // Mirror the RPC rule: when a declared option already claims the plain
@@ -143,7 +148,6 @@ function createQuestionComponent(
     optionItems.push({
       value: "other",
       label: otherLabelTaken ? CUSTOM_OTHER_CHOICE : OTHER_CHOICE,
-      description: "Enter a custom answer",
     });
   }
 
@@ -151,12 +155,29 @@ function createQuestionComponent(
   for (const [index, option] of options.entries()) {
     optionByValue.set(`option:${index}`, option);
   }
-  const selectList = new SelectList(
-    optionItems,
-    Math.min(Math.max(optionItems.length, 1), 8),
-    selectListTheme,
-  );
+  let listRows = Math.min(Math.max(optionItems.length, 1), 8);
+  let selectList = makeSelectList(listRows);
+
+  function makeSelectList(maxVisible: number, selectedIndex = 0): SelectList {
+    const list = new SelectList(optionItems, maxVisible, selectListTheme);
+    list.setSelectedIndex(selectedIndex);
+    list.onSelectionChange = () => {
+      previewOffset = 0;
+      tui.requestRender();
+    };
+    list.onSelect = selectOption;
+    list.onCancel = () => finish({ kind: "cancelled" });
+    return list;
+  }
   const container = new Container();
+
+  function createQuestionHeader(): Text {
+    return new Text(theme.fg("accent", theme.bold(question.header ?? "Ask user")), 1, 0);
+  }
+
+  function createQuestionPrompt(): Text {
+    return new Text(theme.fg("text", question.question), 1, 0);
+  }
 
   function cancel(): void {
     finish({ kind: "cancelled" });
@@ -171,10 +192,8 @@ function createQuestionComponent(
 
   function rebuild(): void {
     container.clear();
-    container.addChild(
-      new Text(theme.fg("accent", theme.bold(question.header ?? "Ask user")), 1, 0),
-    );
-    container.addChild(new Text(theme.fg("text", question.question), 1, 0));
+    container.addChild(createQuestionHeader());
+    container.addChild(createQuestionPrompt());
 
     if (inputMode) {
       container.addChild(new Text(theme.fg("muted", "Your answer:"), 1, 0));
@@ -193,7 +212,7 @@ function createQuestionComponent(
     finish({ kind: "answer", answer: textAnswer(question.id, value) });
   };
 
-  selectList.onSelect = (item) => {
+  function selectOption(item: SelectItem): void {
     if (item.value === "other") {
       inputMode = true;
       editor.setText("");
@@ -204,8 +223,7 @@ function createQuestionComponent(
 
     const option = optionByValue.get(item.value);
     if (option) finish({ kind: "answer", answer: optionAnswer(question.id, option) });
-  };
-  selectList.onCancel = () => finish({ kind: "cancelled" });
+  }
 
   if (signal) {
     signal.addEventListener("abort", cancel, { once: true });
@@ -213,6 +231,21 @@ function createQuestionComponent(
   }
 
   rebuild();
+
+  function frame(lines: string[], width: number): string[] {
+    const panel = new Box(0, 0, (line) => theme.bg("customMessageBg", line));
+    panel.addChild({ render: () => lines, invalidate() {} });
+    const fill = panel.render(width - 2);
+    const rule = theme.fg("borderAccent", `┌${"─".repeat(width - 2)}┐`);
+    const bottom = theme.fg("borderAccent", `└${"─".repeat(width - 2)}┘`);
+    return [
+      rule,
+      ...fill.map(
+        (line) => `${theme.fg("borderAccent", "│")}${line}${theme.fg("borderAccent", "│")}`,
+      ),
+      bottom,
+    ];
+  }
 
   return {
     get focused() {
@@ -222,7 +255,75 @@ function createQuestionComponent(
       focused = value;
       editor.focused = value;
     },
-    render: (width) => container.render(width),
+    render(outerWidth) {
+      const width = Math.max(3, outerWidth) - 2;
+      if (inputMode) return frame(container.render(width), Math.max(3, outerWidth));
+
+      const header = createQuestionHeader().render(width);
+      const prompt = createQuestionPrompt().render(width);
+      const footer = new Text(
+        theme.fg(
+          "dim",
+          width < 55
+            ? "↑↓ • PgUp/PgDn • Enter • Esc"
+            : "↑↓ navigate • PgUp/PgDn preview • Enter select • Esc cancel",
+        ),
+        1,
+        0,
+      ).render(width);
+      // Pi clips overlays at maxHeight. Reserve question, selection, and footer first.
+      const budget = Math.max(1, Math.min(24, tui.terminal.rows - 2) - 2);
+      const available = budget - header.length - prompt.length - footer.length;
+      const desiredRows = Math.max(
+        1,
+        Math.min(8, optionItems.length, available - 2 - (optionItems.length > 1 ? 1 : 0)),
+      );
+      if (desiredRows !== listRows) {
+        const selectedIndex = optionItems.indexOf(selectList.getSelectedItem() ?? optionItems[0]);
+        selectList = makeSelectList(desiredRows, selectedIndex);
+        listRows = desiredRows;
+      }
+      const list = selectList.render(width);
+      const item = selectList.getSelectedItem();
+      const option = item && optionByValue.get(item.value);
+      const content =
+        item?.value === "other"
+          ? "Enter a custom answer"
+          : option
+            ? `${option.label}${option.description === undefined ? "" : `\n${option.description}`}`
+            : "";
+      const preview = new Text(theme.fg("text", content), 1, 0).render(width);
+      const remaining = Math.max(0, available - list.length);
+      previewPageSize = Math.max(0, remaining - (remaining >= 2 ? 1 : 0));
+      previewLength = preview.length;
+      previewOffset = Math.min(previewOffset, Math.max(0, previewLength - previewPageSize));
+      const heading =
+        remaining >= 2
+          ? new Text(
+              theme.fg(
+                "muted",
+                previewLength > previewPageSize
+                  ? `Preview ${previewOffset + 1}/${previewLength}`
+                  : "Preview",
+              ),
+              1,
+              0,
+            ).render(width)
+          : [];
+      previewPageSize = Math.max(0, remaining - heading.length);
+      previewOffset = Math.min(previewOffset, Math.max(0, previewLength - previewPageSize));
+      return frame(
+        [
+          ...header,
+          ...prompt,
+          ...list,
+          ...heading,
+          ...preview.slice(previewOffset, previewOffset + previewPageSize),
+          ...footer,
+        ],
+        Math.max(3, outerWidth),
+      );
+    },
     invalidate: () => {
       container.invalidate();
       rebuild();
@@ -245,7 +346,21 @@ function createQuestionComponent(
         return;
       }
 
-      selectList.handleInput(data);
+      if (
+        keybindings.matches(data, "tui.select.pageDown") ||
+        keybindings.matches(data, "tui.select.pageUp")
+      ) {
+        const delta = Math.max(1, previewPageSize);
+        previewOffset = Math.max(
+          0,
+          Math.min(
+            Math.max(0, previewLength - previewPageSize),
+            previewOffset + (keybindings.matches(data, "tui.select.pageDown") ? delta : -delta),
+          ),
+        );
+      } else {
+        selectList.handleInput(data);
+      }
       tui.requestRender();
     },
   };
@@ -429,8 +544,10 @@ export default function askUser(pi: ExtensionAPI): void {
       if (ctx.mode === "tui" && ctx.hasUI) {
         return result(
           await collectAnswers(params.questions, (question) =>
-            ctx.ui.custom<QuestionInteraction>((tui, theme, _keybindings, done) =>
-              createQuestionComponent(question, tui, theme, signal, done),
+            ctx.ui.custom<QuestionInteraction>(
+              (tui, theme, keybindings, done) =>
+                createQuestionComponent(question, tui, theme, keybindings, signal, done),
+              { overlay: true, overlayOptions: { width: "100%", maxHeight: 24, margin: 1 } },
             ),
           ),
         );
