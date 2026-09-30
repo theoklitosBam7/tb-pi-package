@@ -124,16 +124,17 @@ export async function transcribeLive(
             ],
             { stdio: ["ignore", "pipe", "pipe"] },
           );
-          try {
+          const refreshListeningWidget = () => {
             ui.setWidget("voice-dictation", [
               `Microphone listening: ${choice.alias}. Enter to stop, Esc to cancel.`,
             ]);
+          };
+          try {
+            refreshListeningWidget();
             return await recordLiveSession(session, recorder, ui, (text) => {
               onTranscript?.(text);
               // setEditorText does not request a render; refreshing the widget does.
-              ui.setWidget("voice-dictation", [
-                `Microphone listening: ${choice.alias}. Enter to stop, Esc to cancel.`,
-              ]);
+              refreshListeningWidget();
             });
           } catch (error) {
             if (recorder.exitCode === null) recorder.kill("SIGINT");
