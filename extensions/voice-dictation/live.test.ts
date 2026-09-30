@@ -3,6 +3,25 @@ import { describe, expect, it, vi } from "vitest";
 import { recordLiveSession, transcribePcm } from "./live.js";
 
 describe("Foundry live transcription", () => {
+  it("publishes partial text before recording ends and replaces it with the final transcript", async () => {
+    const updates: string[] = [];
+    const session = {
+      start: async () => {},
+      append: async () => {},
+      stop: async () => {},
+      async *getStream() {
+        yield { content: [{ text: "Hello" }], is_final: false };
+        yield { content: [{ text: " wor" }], is_final: false };
+        yield { content: [{ text: "Hello world." }], is_final: true };
+      },
+    };
+    async function* pcm() {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(updates).toEqual(["Hello", "Hello wor", "Hello world."]);
+      yield new Uint8Array([0, 0]);
+    }
+    expect(await transcribePcm(session, pcm(), (text) => updates.push(text))).toBe("Hello world.");
+  });
   it.skipIf(
     process.platform !== "darwin" ||
       spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status !== 0,
@@ -34,23 +53,10 @@ describe("Foundry live transcription", () => {
       },
     };
     const ui = {
-      custom: async <T>(
-        factory: (
-          tui: unknown,
-          theme: { fg: (_color: "accent", text: string) => string },
-          kb: unknown,
-          done: (result: T) => void,
-        ) => {
-          handleInput(data: string): void;
-          render(width: number): string[];
-          invalidate(): void;
-        },
-      ) =>
-        new Promise<T>((resolve) => {
-          const component = factory(undefined, { fg: (_color, text) => text }, undefined, resolve);
-          expect(component.render(120).join(" ")).toContain("Microphone listening");
-          setTimeout(() => component.handleInput("\r"), 350);
-        }),
+      onTerminalInput: (listener: (data: string) => unknown) => {
+        const timer = setTimeout(() => listener("\r"), 350);
+        return () => clearTimeout(timer);
+      },
     };
     expect(await recordLiveSession(session, recorder, ui)).toBe("Hello");
     expect(session.append).toHaveBeenCalled();

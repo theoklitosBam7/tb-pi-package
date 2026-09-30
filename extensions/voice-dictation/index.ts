@@ -21,7 +21,14 @@ type SpeechModel = { alias: string; id: string; cached: boolean; sizeMb: number 
 type RunFoundry = (args: string[]) => Promise<string>;
 export type DictationUI = Pick<
   ExtensionUIContext,
-  "select" | "confirm" | "notify" | "setWidget" | "getEditorText" | "setEditorText" | "custom"
+  | "select"
+  | "confirm"
+  | "notify"
+  | "setWidget"
+  | "getEditorText"
+  | "setEditorText"
+  | "custom"
+  | "onTerminalInput"
 >;
 export type DictationContext = Pick<ExtensionContext, "mode"> & { ui: DictationUI };
 
@@ -85,7 +92,8 @@ type DictationDependencies = {
   transcribe: (file: string, model: string) => Promise<string>;
   liveTranscribe: (
     model: SpeechModel,
-    ui: Pick<ExtensionUIContext, "custom" | "setWidget">,
+    ui: Pick<ExtensionUIContext, "onTerminalInput" | "setWidget">,
+    onTranscript: (text: string) => void,
   ) => Promise<string | undefined>;
   download: (model: SpeechModel, onProgress: (percent: number) => void) => Promise<void>;
 };
@@ -199,7 +207,7 @@ async function recordMicrophone(
 
 function addTranscript(ui: DictationUI, text: string): void {
   const current = ui.getEditorText();
-  ui.setEditorText(current ? `${current}\n${text}` : text);
+  ui.setEditorText(current ? `${current} ${text}` : text);
   ui.notify("Dictation added to editor. Review it before sending.", "info");
 }
 
@@ -209,7 +217,8 @@ function voiceDictation(
     listModels: () => listSpeechModels(),
     record: recordMicrophone,
     transcribe: (file, model) => transcribeFile({ run: runFoundry, file, model }),
-    liveTranscribe: async (model, ui) => transcribeLive(model, await foundryCacheDir(), ui),
+    liveTranscribe: async (model, ui, onTranscript) =>
+      transcribeLive(model, await foundryCacheDir(), ui, onTranscript),
     download: async (model, onProgress) =>
       downloadModel(model, await foundryCacheDir(), onProgress),
   },
@@ -277,15 +286,25 @@ function voiceDictation(
       }
 
       if (model.alias.startsWith("nemotron-") && model.alias.includes("streaming")) {
+        const originalText = ctx.ui.getEditorText();
+        const updateTranscript = (text: string) => {
+          ctx.ui.setEditorText(
+            text ? (originalText ? `${originalText} ${text}` : text) : originalText,
+          );
+        };
         let text: string | undefined;
         try {
           ctx.ui.setWidget("voice-dictation", [`Preparing ${model.alias} microphone...`]);
-          text = await dependencies.liveTranscribe(model, ctx.ui);
+          text = await dependencies.liveTranscribe(model, ctx.ui, updateTranscript);
+        } catch (error) {
+          ctx.ui.setEditorText(originalText);
+          throw error;
         } finally {
           ctx.ui.setWidget("voice-dictation", undefined);
         }
+        updateTranscript(text ?? "");
         if (text) {
-          addTranscript(ctx.ui, text);
+          ctx.ui.notify("Dictation added to editor. Review it before sending.", "info");
         }
         return;
       }
