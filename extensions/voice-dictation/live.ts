@@ -1,22 +1,13 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
 import type { IModel, LiveAudioTranscriptionSession } from "foundry-local-sdk";
 
 type Session = Pick<LiveAudioTranscriptionSession, "start" | "append" | "stop" | "getStream">;
 type ModelChoice = { alias: string; id: string };
 
-type RecordingUI = {
-  custom<T>(
-    factory: (
-      tui: unknown,
-      theme: { fg: (color: "accent", text: string) => string },
-      keybindings: unknown,
-      done: (result: T) => void,
-    ) => { render(width: number): string[]; invalidate(): void; handleInput(data: string): void },
-  ): Promise<T>;
-};
+type RecordingUI = Pick<ExtensionUIContext, "onTerminalInput">;
 
 export const microphoneInputArgs = [
   "-f",
@@ -34,13 +25,22 @@ export const microphoneInputArgs = [
 export async function transcribePcm(
   session: Session,
   pcm: AsyncIterable<Uint8Array>,
+  onTranscript?: (text: string) => void,
 ): Promise<string> {
   await session.start();
   const read = (async () => {
     const segments: string[] = [];
+    let partial = "";
     for await (const result of session.getStream()) {
-      const text = result.content?.[0]?.text?.trim();
-      if (result.is_final && text) segments.push(text);
+      const text = result.content?.[0]?.text;
+      if (text === undefined || text === null) continue;
+      if (result.is_final) {
+        if (text.trim()) segments.push(text.trim());
+        partial = "";
+      } else {
+        partial += text;
+      }
+      onTranscript?.([...segments, partial.trim()].filter(Boolean).join(" "));
     }
     return segments.join(" ");
   })();
@@ -59,22 +59,25 @@ export async function transcribePcm(
   return result.text;
 }
 
-let managerPromise:
-  | ReturnType<(typeof import("foundry-local-sdk"))["FoundryLocalManager"]["createAsync"]>
-  | undefined;
-
-async function getModel(choice: ModelChoice, cacheDir: string): Promise<IModel> {
+async function withModel<T>(
+  choice: ModelChoice,
+  cacheDir: string,
+  run: (model: IModel) => Promise<T>,
+): Promise<T> {
   const { FoundryLocalManager } = await import("foundry-local-sdk");
-  managerPromise ??= FoundryLocalManager.createAsync({
+  const manager = await FoundryLocalManager.createAsync({
     appName: "pi_voice_dictation",
     modelCacheDir: cacheDir,
     logLevel: "error",
   });
-  const manager = await managerPromise;
-  const model = await manager.catalog.getModel(choice.alias);
-  const variant = model?.variants.find((candidate) => candidate.id === choice.id);
-  if (!variant) throw new Error(`Foundry Local cannot find ${choice.id}`);
-  return variant;
+  try {
+    const model = await manager.catalog.getModel(choice.alias);
+    const variant = model?.variants.find((candidate) => candidate.id === choice.id);
+    if (!variant) throw new Error(`Foundry Local cannot find ${choice.id}`);
+    return await run(variant);
+  } finally {
+    manager.dispose();
+  }
 }
 
 export async function downloadModel(
@@ -82,60 +85,79 @@ export async function downloadModel(
   cacheDir: string,
   onProgress: (percent: number) => void,
 ): Promise<void> {
-  const model = await getModel(choice, cacheDir);
-  if (!model.isCached) await model.download(onProgress);
+  await withModel(choice, cacheDir, async (model) => {
+    if (!model.isCached) await model.download(onProgress);
+  });
 }
 
 export async function transcribeLive(
   choice: ModelChoice,
   cacheDir: string,
-  ui: Pick<ExtensionUIContext, "custom" | "setWidget">,
+  ui: RecordingUI & Pick<ExtensionUIContext, "setWidget">,
+  onTranscript?: (text: string) => void,
 ): Promise<string | undefined> {
   if (process.platform !== "darwin")
     throw new Error("Microphone recording currently requires macOS");
-  const model = await getModel(choice, cacheDir);
-  await model.load();
-  try {
-    const session = model.createAudioClient().createLiveTranscriptionSession();
-    session.settings.sampleRate = 16000;
-    session.settings.channels = 1;
-    session.settings.bitsPerSample = 16;
-    session.settings.language = choice.alias.includes("-en-") ? "en" : "auto";
-
-    const recorder = spawn(
-      "ffmpeg",
-      [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostdin",
-        ...microphoneInputArgs,
-        "-f",
-        "s16le",
-        "pipe:1",
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
+  return withModel(choice, cacheDir, async (model) => {
+    await model.load();
     try {
-      ui.setWidget("voice-dictation", [
-        `Microphone listening: ${choice.alias}. Enter to stop, Esc to cancel.`,
-      ]);
-      return await recordLiveSession(session, recorder, ui);
-    } catch (error) {
-      if (recorder.exitCode === null) recorder.kill("SIGINT");
-      throw error;
+      const client = model.createAudioClient();
+      try {
+        const session = client.createLiveTranscriptionSession();
+        try {
+          session.settings.sampleRate = 16000;
+          session.settings.channels = 1;
+          session.settings.bitsPerSample = 16;
+          session.settings.language = choice.alias.includes("-en-") ? "en" : "auto";
+
+          const recorder = spawn(
+            "ffmpeg",
+            [
+              "-hide_banner",
+              "-loglevel",
+              "error",
+              "-nostdin",
+              ...microphoneInputArgs,
+              "-f",
+              "s16le",
+              "pipe:1",
+            ],
+            { stdio: ["ignore", "pipe", "pipe"] },
+          );
+          try {
+            ui.setWidget("voice-dictation", [
+              `Microphone listening: ${choice.alias}. Enter to stop, Esc to cancel.`,
+            ]);
+            return await recordLiveSession(session, recorder, ui, (text) => {
+              onTranscript?.(text);
+              // setEditorText does not request a render; refreshing the widget does.
+              ui.setWidget("voice-dictation", [
+                `Microphone listening: ${choice.alias}. Enter to stop, Esc to cancel.`,
+              ]);
+            });
+          } catch (error) {
+            if (recorder.exitCode === null) recorder.kill("SIGINT");
+            throw error;
+          } finally {
+            ui.setWidget("voice-dictation", undefined);
+          }
+        } finally {
+          await session.dispose();
+        }
+      } finally {
+        client.dispose();
+      }
     } finally {
-      ui.setWidget("voice-dictation", undefined);
+      await model.unload();
     }
-  } finally {
-    await model.unload();
-  }
+  });
 }
 
 export async function recordLiveSession(
   session: Session,
   recorder: ChildProcessByStdio<null, Readable, Readable>,
   ui: RecordingUI,
+  onTranscript?: (text: string) => void,
 ): Promise<string | undefined> {
   let stderr = "";
   recorder.stderr.setEncoding("utf8");
@@ -162,44 +184,44 @@ export async function recordLiveSession(
       resolve();
     });
   });
-  const task = transcribePcm(session, recorder.stdout);
-  // A microphone or SDK failure must close the recording dialog.
+  const task = transcribePcm(session, recorder.stdout, onTranscript);
+  // A microphone or SDK failure must stop capture even without keyboard input.
+  let taskFinished = false;
   task.then(
-    () => finish?.("failed"),
+    () => {
+      taskFinished = true;
+      finish?.("failed");
+    },
     (error) => {
+      taskFinished = true;
       failure = error instanceof Error ? error : new Error(String(error));
       finish?.("failed");
     },
   );
   let choiceResult: "stop" | "cancel" | "failed" = "failed";
+  let unsubscribe: (() => void) | undefined;
   try {
-    choiceResult = await ui.custom<"stop" | "cancel" | "failed">((_tui, theme, _kb, done) => {
-      finish = done;
-      if (failure || recorder.exitCode !== null) queueMicrotask(() => done("failed"));
-      return {
-        render: (width) => [
-          truncateToWidth(
-            theme.fg(
-              "accent",
-              "Microphone listening. Foundry Local is transcribing. Enter to stop, Esc to cancel.",
-            ),
-            width,
-          ),
-        ],
-        invalidate() {},
-        handleInput(data) {
-          if (matchesKey(data, "return")) done("stop");
-          else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) done("cancel");
-        },
-      };
-    });
+    try {
+      choiceResult = await new Promise<"stop" | "cancel" | "failed">((resolve) => {
+        finish = resolve;
+        unsubscribe = ui.onTerminalInput((data) => {
+          if (matchesKey(data, "return")) finish?.("stop");
+          else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) finish?.("cancel");
+          return { consume: true };
+        });
+        if (failure || taskFinished || recorder.exitCode !== null)
+          queueMicrotask(() => resolve("failed"));
+      });
+    } finally {
+      finish = undefined;
+      if (recorder.exitCode === null) recorder.kill("SIGINT");
+      await closed;
+    }
+    const text = await task;
+    if (failure) throw failure;
+    if (choiceResult === "failed") throw new Error("Live microphone capture stopped unexpectedly");
+    return choiceResult === "cancel" ? undefined : text;
   } finally {
-    finish = undefined;
-    if (recorder.exitCode === null) recorder.kill("SIGINT");
-    await closed;
+    unsubscribe?.();
   }
-  const text = await task;
-  if (failure) throw failure;
-  if (choiceResult === "failed") throw new Error("Live microphone capture stopped unexpectedly");
-  return choiceResult === "cancel" ? undefined : text;
 }

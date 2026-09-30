@@ -199,8 +199,8 @@ describe("/dictate", () => {
       }),
     );
     expect(transcribe).not.toHaveBeenCalled();
-    expect(liveTranscribe).toHaveBeenCalledWith(model, expect.anything());
-    expect(setEditorText).toHaveBeenCalledWith("Before\nLive speech works.");
+    expect(liveTranscribe).toHaveBeenCalledWith(model, expect.anything(), expect.any(Function));
+    expect(setEditorText).toHaveBeenCalledWith("Before Live speech works.");
   });
 
   it("inserts the transcript after existing editor text without sending it", async () => {
@@ -238,7 +238,7 @@ describe("/dictate", () => {
       "",
       testContext({ getEditorText: () => "Before", setEditorText, notify }),
     );
-    expect(setEditorText).toHaveBeenCalledWith("Before\nTurn left at the next street.");
+    expect(setEditorText).toHaveBeenCalledWith("Before Turn left at the next street.");
     expect(record).toHaveBeenCalledOnce();
     expect(transcribe).toHaveBeenCalledWith(
       expect.any(String),
@@ -364,6 +364,44 @@ describe("/dictate", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("not valid JSON"), "error");
   });
 
+  it.each(["cancel", "failure"])(
+    "restores the original prompt after live transcription %s with partial text",
+    async (outcome) => {
+      const model = {
+        alias: "nemotron-speech-streaming-en-0.6b",
+        id: "live-id",
+        cached: true,
+        sizeMb: 696,
+      };
+      const path = await settingsFile(model.id);
+      let command: CommandOptions | undefined;
+      const setEditorText = vi.fn();
+      voiceDictation(
+        {
+          registerCommand: (_name, options) => {
+            command = options;
+          },
+          registerShortcut() {},
+        },
+        {
+          listModels: async () => [model],
+          record: vi.fn(),
+          transcribe: vi.fn(),
+          download: vi.fn(),
+          liveTranscribe: async (_model, _ui, onTranscript) => {
+            onTranscript("Unfinished speech");
+            expect(setEditorText).toHaveBeenLastCalledWith("Original Unfinished speech");
+            if (outcome === "failure") throw new Error("Transcription failed");
+            return undefined;
+          },
+        },
+        path,
+      );
+      await command?.handler("", testContext({ getEditorText: () => "Original", setEditorText }));
+      expect(setEditorText).toHaveBeenLastCalledWith("Original");
+    },
+  );
+
   it("starts the saved live model from ctrl+alt+r without opening the selector", async () => {
     const model = {
       alias: "nemotron-speech-streaming-en-0.6b",
@@ -373,10 +411,15 @@ describe("/dictate", () => {
     };
     const path = await settingsFile(model.id);
     let shortcut: ShortcutOptions | undefined;
-    const liveTranscribe = vi.fn().mockImplementation(async (_model, ui) => {
+    const setEditorText = vi.fn();
+    const liveTranscribe = vi.fn().mockImplementation(async (_model, ui, onTranscript) => {
       expect(ui.setWidget).toHaveBeenCalledWith("voice-dictation", [
         expect.stringContaining("Preparing"),
       ]);
+      onTranscript("Spoken");
+      expect(setEditorText).toHaveBeenLastCalledWith("Existing prompt Spoken");
+      onTranscript("Spoken tex");
+      expect(setEditorText).toHaveBeenLastCalledWith("Existing prompt Spoken tex");
       return "Spoken text";
     });
     voiceDictation(
@@ -397,12 +440,13 @@ describe("/dictate", () => {
       path,
     );
     const select = vi.fn();
-    const setEditorText = vi.fn();
     const setWidget = vi.fn();
-    await shortcut?.handler(testContext({ select, setEditorText, setWidget }));
+    await shortcut?.handler(
+      testContext({ select, setEditorText, setWidget, getEditorText: () => "Existing prompt" }),
+    );
     expect(select).not.toHaveBeenCalled();
-    expect(liveTranscribe).toHaveBeenCalledWith(model, expect.anything());
-    expect(setEditorText).toHaveBeenCalledWith("Spoken text");
+    expect(liveTranscribe).toHaveBeenCalledWith(model, expect.anything(), expect.any(Function));
+    expect(setEditorText).toHaveBeenLastCalledWith("Existing prompt Spoken text");
     expect(setWidget).toHaveBeenLastCalledWith("voice-dictation", undefined);
   });
 });
