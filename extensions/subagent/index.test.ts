@@ -1,14 +1,18 @@
 import { EventEmitter } from "node:events";
+import { createServer } from "node:net";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { getPackageDir, initTheme } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn() };
+});
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import subagentExtension, { buildSubagentArgs } from "./index.js";
 import {
   buildArtifactPath,
@@ -675,6 +679,115 @@ function registerPersistenceTestTools(thinkingLevel?: "off" | "xhigh"): Record<s
   } as any);
   return tools;
 }
+
+describe("subagent process launch", () => {
+  it.each(["SDK host", "Pi CLI", "symlinked Pi CLI", "compiled Pi binary"])(
+    "launches Pi from a %s parent without rerunning an SDK host",
+    async (parentKind) => {
+      const project = createPersistenceTestProject(
+        "sdk-launch-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const hostScript = path.join(project, "workbench-server.mjs");
+      fs.writeFileSync(
+        hostScript,
+        "import { createServer } from 'node:net';\n" +
+          "createServer().listen(Number(process.env.PORT), '127.0.0.1');\n",
+      );
+      const originalArgv = process.argv;
+      const originalExecPath = process.execPath;
+      const installedCli = path.join(getPackageDir(), "dist", "cli.js");
+      const cliSymlink = path.join(project, "pi-cli.js");
+      fs.symlinkSync(installedCli, cliSymlink);
+      const child = createPersistenceTestChild();
+      vi.mocked(spawn).mockReturnValue(child as never);
+      const tools = registerPersistenceTestTools();
+      try {
+        if (parentKind === "compiled Pi binary") {
+          process.execPath = path.join(project, "pi");
+          process.argv = [process.execPath];
+        } else {
+          const parentScript =
+            parentKind === "Pi CLI"
+              ? installedCli
+              : parentKind === "symlinked Pi CLI"
+                ? cliSymlink
+                : hostScript;
+          process.argv = [process.execPath, parentScript];
+        }
+        const execution = tools.agent.execute(
+          "call-sdk-launch",
+          {
+            agent: "worker",
+            task: "Inspect the workspace",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+        const invocation = vi.mocked(spawn).mock.calls[0];
+        child.emit("close", 0, null);
+        await execution;
+        expect(invocation?.[0]).toBe(process.execPath);
+        const expectedEntry =
+          parentKind === "compiled Pi binary"
+            ? "--mode"
+            : parentKind === "symlinked Pi CLI"
+              ? cliSymlink
+              : installedCli;
+        expect(invocation?.[1]?.[0]).toBe(expectedEntry);
+        expect(invocation?.[1]).not.toContain(hostScript);
+        if (parentKind === "SDK host") {
+          const listener = createServer();
+          try {
+            await new Promise<void>((resolve, reject) => {
+              listener.once("error", reject);
+              listener.listen(0, "127.0.0.1", resolve);
+            });
+            const address = listener.address();
+            if (!address || typeof address === "string")
+              throw new Error("Expected a temporary port");
+            const command = invocation?.[0];
+            const entry = invocation?.[1]?.[0];
+            if (typeof command !== "string" || typeof entry !== "string")
+              throw new Error("Expected a Pi child invocation");
+            const help = spawnSync(command, [entry, "--help"], {
+              cwd: project,
+              encoding: "utf8",
+              timeout: 10_000,
+              env: {
+                ...process.env,
+                PORT: String(address.port),
+                PI_CODING_AGENT_SESSION_DIR: path.join(project, "sessions"),
+                PI_OFFLINE: "1",
+                PI_SKIP_VERSION_CHECK: "1",
+              },
+            });
+            expect(help.error).toBeUndefined();
+            expect(help.status, help.stderr).toBe(0);
+            expect(help.stdout).toContain("--mode");
+            expect(help.stderr).not.toContain("EADDRINUSE");
+          } finally {
+            await new Promise<void>((resolve) => listener.close(() => resolve()));
+          }
+        }
+      } finally {
+        process.argv = originalArgv;
+        process.execPath = originalExecPath;
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
 describe("subagent tool guidance", () => {
   it("tells callers to omit model and thinking unless the user requests an override", () => {

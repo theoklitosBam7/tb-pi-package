@@ -1,3 +1,5 @@
-## Test-driven implementation workflow
+## Test-driven development
 
-Use behavior-first TDD for Pi Harness coding issues. Do not force TDD onto discovery, documentation, compatibility-audit, or repository-maintenance work where no executable behavior is being added or changed.
+For every coding task that adds or changes executable behavior, load and follow the `tdd` skill before implementation. If the skill is unavailable or a meaningful executable test is blocked, stop and report the blocker before continuing.
+
+Skip TDD for discovery, documentation, compatibility audits, and repository maintenance that do not change executable behavior. Run checks appropriate to that work.
