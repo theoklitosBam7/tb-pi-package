@@ -331,11 +331,12 @@ async function writePromptToTempFile(
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
   const packageDir = getPackageDir();
   const cliScript = path.join(packageDir, "dist", "cli.js");
+  const bundledCliScript = path.join(packageDir, "dist", "bundle", "cli.js");
   const sourceCliScript = path.join(packageDir, "src", "cli.ts");
   const currentScript = process.argv[1];
   if (currentScript && fs.existsSync(currentScript)) {
     const resolvedScript = fs.realpathSync(currentScript);
-    const isPiCli = [cliScript, sourceCliScript].some(
+    const isPiCli = [cliScript, bundledCliScript, sourceCliScript].some(
       (candidate) => fs.existsSync(candidate) && fs.realpathSync(candidate) === resolvedScript,
     );
     if (isPiCli) return { command: process.execPath, args: [currentScript, ...args] };
