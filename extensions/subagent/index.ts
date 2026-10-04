@@ -23,6 +23,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
   getMarkdownTheme,
+  getPackageDir,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -328,15 +329,27 @@ async function writePromptToTempFile(
 }
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
+  const packageDir = getPackageDir();
+  const cliScript = path.join(packageDir, "dist", "cli.js");
+  const bundledCliScript = path.join(packageDir, "dist", "bundle", "cli.js");
+  const sourceCliScript = path.join(packageDir, "src", "cli.ts");
   const currentScript = process.argv[1];
   if (currentScript && fs.existsSync(currentScript)) {
-    return { command: process.execPath, args: [currentScript, ...args] };
+    const resolvedScript = fs.realpathSync(currentScript);
+    const isPiCli = [cliScript, bundledCliScript, sourceCliScript].some(
+      (candidate) => fs.existsSync(candidate) && fs.realpathSync(candidate) === resolvedScript,
+    );
+    if (isPiCli) return { command: process.execPath, args: [currentScript, ...args] };
   }
 
   const execName = path.basename(process.execPath).toLowerCase();
   const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
   if (!isGenericRuntime) {
     return { command: process.execPath, args };
+  }
+
+  if (fs.existsSync(cliScript)) {
+    return { command: process.execPath, args: [cliScript, ...args] };
   }
 
   return { command: "pi", args };
