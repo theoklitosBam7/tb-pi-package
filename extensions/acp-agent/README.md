@@ -44,8 +44,11 @@ The package loads `./extensions` automatically.
 ## Limitations
 
 ACP v1 only. Client filesystem, terminal and permission requests are not supported.
-A reused session preserves agent state between tasks. Use separate workspaces or restart Pi when isolation is required. The task output includes only `agent_message_chunk` text. Session persistence,
-rich tool events, MCP server injection, and ACP v2 are not supported.
+A reused session preserves agent state between tasks. Use separate workspaces
+or restart Pi when isolation is required. The task output includes only
+`agent_message_chunk` text. Rich tool events, MCP server injection, and ACP v2
+are not supported. Sessions are reused only within the current Pi process;
+restoring an ACP session after Pi restarts is not supported.
 
 ## Timeouts
 
