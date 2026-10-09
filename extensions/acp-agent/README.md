@@ -12,7 +12,10 @@ ACP-capable agent in stdio mode, with its required arguments. For example:
 {
   "my-agent": {
     "command": "/absolute/path/to/acp-agent",
-    "args": []
+    "args": [],
+    "startupTimeoutMs": 30000,
+    "timeoutMs": 600000,
+    "inactivityTimeoutMs": 120000
   }
 }
 ```
@@ -29,7 +32,8 @@ The package loads `./extensions` automatically.
 - Rejects symlinked, group-readable or world-readable configuration files.
 - Rejects agent-initiated client methods, including permissions, filesystem and terminal.
 - Bounded task length (100k characters), JSON frame (1 MiB), output (256 KiB),
-  runtime (120 s), and concurrent runs (2).
+  startup (30 s), total runtime (10 min by default, configurable up to 60 min),
+  inactivity (2 min by default), and concurrent runs (2).
 - Cancellation kills the child process; errors do not expose stderr.
 - Child processes inherit the current working directory and environment.
   **This is not a sandbox.** Only configure agents you trust. Do not run with secrets
@@ -42,3 +46,19 @@ The package loads `./extensions` automatically.
 ACP v1 only. Client filesystem, terminal and permission requests are not supported.
 The task output includes only `agent_message_chunk` text. Session persistence,
 rich tool events, MCP server injection, and ACP v2 are not supported.
+
+## Timeouts
+
+All settings are optional, per-agent, in milliseconds. Allowed values are
+1 through 3,600,000 ms (60 minutes). Defaults:
+
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| `startupTimeoutMs` | 30,000 | Initialize response must arrive before this deadline |
+| `timeoutMs` | 600,000 | Absolute deadline from process launch |
+| `inactivityTimeoutMs` | 120,000 | Valid ACP messages reset this deadline |
+
+The overall deadline cannot be reset by agent output. Long tasks can run if
+they continue sending protocol messages, but they still stop at `timeoutMs`.
+A slow but quiet agent may hit `inactivityTimeoutMs` first. Cancellation
+remains available at all times.
