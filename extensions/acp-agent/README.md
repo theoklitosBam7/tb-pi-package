@@ -38,13 +38,13 @@ The package loads `./extensions` automatically.
 - Child processes inherit the current working directory and environment.
   **This is not a sandbox.** Only configure agents you trust. Do not run with secrets
   in the environment that those agents should not access.
-- No session pooling in this version. A fresh process is used for each task
-  to avoid cross-task state. The concurrency limit protects resources.
+- Idle sessions close after 60 seconds; sessions close on Pi shutdown, task failure, or cancellation. Sessions are reused for sequential tasks to the same agent and workspace.
+  Each session accepts one task at a time. A maximum of two sessions can exist.
 
 ## Limitations
 
 ACP v1 only. Client filesystem, terminal and permission requests are not supported.
-The task output includes only `agent_message_chunk` text. Session persistence,
+A reused session preserves agent state between tasks. Use separate workspaces or restart Pi when isolation is required. The task output includes only `agent_message_chunk` text. Session persistence,
 rich tool events, MCP server injection, and ACP v2 are not supported.
 
 ## Timeouts
@@ -62,3 +62,13 @@ The overall deadline cannot be reset by agent output. Long tasks can run if
 they continue sending protocol messages, but they still stop at `timeoutMs`.
 A slow but quiet agent may hit `inactivityTimeoutMs` first. Cancellation
 remains available at all times.
+
+## Persistent sessions
+
+The extension now reuses one ACP process and session for sequential tasks to the
+same agent, executable configuration, working directory, and timeout settings.
+Different workspaces use different sessions. Two sessions are allowed in total.
+Concurrent tasks for one session are rejected rather than interleaved.
+Idle sessions are closed after 60 seconds. An error, cancellation, or Pi shutdown
+closes the related process. This avoids repeated startup cost, but means the
+agent can retain prior task context and has access to the same workspace.
