@@ -99,7 +99,7 @@ export class AcpSessionPool {
         clearTimeout(s.timer);
         for (const p of s.pending.values()) p.reject(error);
         s.pending.clear();
-        child.kill();
+        child.kill("SIGKILL");
       },
       send(method, params) {
         if (s.closed) return Promise.reject(new Error("ACP session closed"));
