@@ -33,6 +33,14 @@ describe("persistent ACP sessions", () => {
       expect(await pool.run("test", agent, "/tmp", "second")).toBe("1");
     } finally { pool.close(); }
   });
+  it("closes idle sessions and starts fresh on the next task", async () => {
+    const pool = new AcpSessionPool({ idleTimeoutMs: 30 });
+    try {
+      expect(await pool.run("test", agent, process.cwd(), "first")).toBe("1");
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(await pool.run("test", agent, process.cwd(), "second")).toBe("1");
+    } finally { pool.close(); }
+  });
   it("rejects concurrent prompts on one session", async () => {
     const pool = new AcpSessionPool({ idleTimeoutMs: 5000 });
     const slow = { command: process.execPath, args: ["-e", 'process.stdin.resume()'], startupTimeoutMs: 1000 };
