@@ -32,7 +32,19 @@ function loadAgents(): Record<string, AcpAgentConfig> {
     if (typeof entry.command !== "string" || !path.isAbsolute(entry.command) ||
         !Array.isArray(entry.args) || !entry.args.every(x => typeof x === "string"))
       throw new Error("ACP agents require an absolute executable path and string arguments");
-    agents[name] = { command: entry.command, args: entry.args as string[] };
+    const limits = ["timeoutMs", "startupTimeoutMs", "inactivityTimeoutMs"] as const;
+    for (const key of limits) {
+      const value = entry[key];
+      if (value !== undefined && (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 3_600_000))
+        throw new Error(`Invalid ACP timeout for ${name}: ${key}`);
+    }
+    agents[name] = {
+      command: entry.command,
+      args: entry.args as string[],
+      timeoutMs: entry.timeoutMs as number | undefined,
+      startupTimeoutMs: entry.startupTimeoutMs as number | undefined,
+      inactivityTimeoutMs: entry.inactivityTimeoutMs as number | undefined,
+    };
   }
   return agents;
 }
