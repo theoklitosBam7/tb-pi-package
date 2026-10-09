@@ -43,3 +43,31 @@ describe("ACP task boundary", () => {
       .rejects.toThrow(/cancel/i);
   });
 });
+
+describe("ACP timeout policy", () => {
+  const silent = 'process.stdin.resume()';
+  it("rejects a task that exceeds its configured deadline", async () => {
+    await expect(runAcpTask(
+      { command: process.execPath, args: ["-e", silent], timeoutMs: 50, startupTimeoutMs: 500, inactivityTimeoutMs: 500 },
+      "/tmp", "long task",
+    )).rejects.toThrow(/task timed out/);
+  });
+  it("rejects an agent that fails to initialize in time", async () => {
+    await expect(runAcpTask(
+      { command: process.execPath, args: ["-e", silent], startupTimeoutMs: 50, timeoutMs: 500, inactivityTimeoutMs: 500 },
+      "/tmp", "startup",
+    )).rejects.toThrow(/startup timed out/);
+  });
+  it("rejects a silent agent after the inactivity limit", async () => {
+    await expect(runAcpTask(
+      { command: process.execPath, args: ["-e", silent], startupTimeoutMs: 500, timeoutMs: 500, inactivityTimeoutMs: 50 },
+      "/tmp", "silent",
+    )).rejects.toThrow(/inactivity timed out/);
+  });
+  it("rejects timeout settings above the 60-minute cap", async () => {
+    await expect(runAcpTask(
+      { command: process.execPath, args: ["-e", silent], timeoutMs: 3_600_001 },
+      "/tmp", "invalid",
+    )).rejects.toThrow(/Invalid ACP timeout/);
+  });
+});
