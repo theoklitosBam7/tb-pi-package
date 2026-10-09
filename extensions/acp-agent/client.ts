@@ -3,12 +3,29 @@ import { spawn } from "node:child_process";
 export interface AcpAgentConfig {
   command: string;
   args: string[];
+  /** Overall deadline from process launch; default 10 minutes, maximum 60 minutes. */
+  timeoutMs?: number;
+  /** Deadline for ACP initialize response; default 30 seconds. */
+  startupTimeoutMs?: number;
+  /** Maximum gap without valid ACP messages; default 2 minutes. */
+  inactivityTimeoutMs?: number;
 }
 
 const MAX_TASK = 100_000;
 const MAX_FRAME = 1024 * 1024;
 const MAX_OUTPUT = 256 * 1024;
-const TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 10 * 60_000;
+const DEFAULT_STARTUP_MS = 30_000;
+const DEFAULT_INACTIVITY_MS = 2 * 60_000;
+const MAX_TIMEOUT_MS = 60 * 60_000;
+
+function validTimeout(value: number | undefined, fallback: number): number {
+  const result = value ?? fallback;
+  if (!Number.isSafeInteger(result) || result < 1 || result > MAX_TIMEOUT_MS) {
+    throw new Error("Invalid ACP timeout (must be 1..3600000 ms)");
+  }
+  return result;
+}
 
 /** Run one isolated ACP v1 session over JSON-RPC stdio. */
 export async function runAcpTask(
@@ -21,6 +38,9 @@ export async function runAcpTask(
   if (signal?.aborted) throw new Error("ACP task cancelled");
   if (!config.command || !Array.isArray(config.args) || !config.args.every(a => typeof a === "string"))
     throw new Error("Invalid ACP executable configuration");
+  const timeoutMs = validTimeout(config.timeoutMs, DEFAULT_TIMEOUT_MS);
+  const startupTimeoutMs = validTimeout(config.startupTimeoutMs, DEFAULT_STARTUP_MS);
+  const inactivityTimeoutMs = validTimeout(config.inactivityTimeoutMs, DEFAULT_INACTIVITY_MS);
 
   return await new Promise<string>((resolve, reject) => {
     const child = spawn(config.command, config.args, {
@@ -35,12 +55,21 @@ export async function runAcpTask(
     let output = "";
     let nextId = 0;
     let stage = 0;
-    const timeout = setTimeout(() => fail(new Error("ACP task timed out")), TIMEOUT_MS);
+    const timeout = setTimeout(() => fail(new Error("ACP task timed out")), timeoutMs);
+    const startupTimeout = setTimeout(() => fail(new Error("ACP startup timed out")), startupTimeoutMs);
+    let inactivityTimeout: ReturnType<typeof setTimeout>;
+    function refreshInactivity() {
+      clearTimeout(inactivityTimeout);
+      inactivityTimeout = setTimeout(() => fail(new Error("ACP inactivity timed out")), inactivityTimeoutMs);
+    }
+    refreshInactivity();
     const abort = () => fail(new Error("ACP task cancelled"));
     signal?.addEventListener("abort", abort, { once: true });
 
     function cleanup() {
       clearTimeout(timeout);
+      clearTimeout(startupTimeout);
+      clearTimeout(inactivityTimeout);
       signal?.removeEventListener("abort", abort);
     }
     function fail(error: Error) {
@@ -83,6 +112,9 @@ export async function runAcpTask(
         if (!line.trim()) continue;
         let frame: any;
         try { frame = JSON.parse(line); } catch { fail(new Error("Invalid ACP JSON")); return; }
+        // Only valid protocol messages reset the inactivity deadline.
+        if (frame.jsonrpc !== "2.0") { fail(new Error("Invalid ACP protocol message")); return; }
+        refreshInactivity();
         if (frame.method === "session/update") {
           const update = frame.params?.update;
           if (update?.sessionUpdate === "agent_message_chunk" && update.content?.type === "text") {
@@ -105,6 +137,7 @@ export async function runAcpTask(
         if (frame.error) { fail(new Error("ACP agent returned an error")); return; }
         if (stage === 0) {
           if (frame.result?.protocolVersion !== 1) { fail(new Error("Unsupported ACP protocol version")); return; }
+          clearTimeout(startupTimeout);
           stage = 1;
           send("session/new", { cwd, mcpServers: [] });
         } else if (stage === 1) {
