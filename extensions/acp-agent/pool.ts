@@ -31,6 +31,7 @@ export class AcpSessionPool {
     const quiet = limit(config.inactivityTimeoutMs, 120_000);
     const key = JSON.stringify([name, cwd, config.command, config.args, total, startup, quiet]);
     let s = this.sessions.get(key);
+    if (s?.closed) { this.sessions.delete(key); s = undefined; }
     if (s?.busy || this.opening.has(key)) throw new Error("ACP agent session busy");
     if (!s && this.sessions.size + this.opening.size >= 2) throw new Error("ACP session limit reached");
     this.opening.add(key);
