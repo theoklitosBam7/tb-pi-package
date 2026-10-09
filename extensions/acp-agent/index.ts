@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { runAcpTask, type AcpAgentConfig } from "./client.js";
+import type { AcpAgentConfig } from "./client.js";
+import { AcpSessionPool } from "./pool.js";
 
 const CONFIG = path.join(os.homedir(), ".pi", "agent", "acp-agents.json");
 const NAME = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -50,6 +51,8 @@ function loadAgents(): Record<string, AcpAgentConfig> {
 }
 
 export default function (pi: ExtensionAPI) {
+  const pool = new AcpSessionPool();
+  pi.on("session_shutdown", () => pool.close());
   pi.registerTool({
     name: "acp_agent",
     label: "ACP Agent",
@@ -65,7 +68,7 @@ export default function (pi: ExtensionAPI) {
         if (active >= MAX_ACTIVE) throw new Error("ACP agent concurrency limit reached");
         active++;
         try {
-          const output = await runAcpTask(agents[params.agent], ctx.cwd, params.task, signal);
+          const output = await pool.run(params.agent, agents[params.agent], ctx.cwd, params.task, signal);
           return { content: [{ type: "text" as const, text: output || "(ACP agent returned no text)" }] };
         } finally {
           active--;
