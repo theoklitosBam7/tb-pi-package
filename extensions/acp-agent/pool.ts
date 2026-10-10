@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import type { AcpAgentConfig } from "./client.js";
 
 type Waiter = { resolve: (value: any) => void; reject: (error: Error) => void };
@@ -17,6 +18,9 @@ function limit(value: number | undefined, fallback: number) {
 export class AcpSessionPool {
   private sessions = new Map<string, Session>();
   private opening = new Set<string>();
+  private evictClosed() {
+    for (const [key, s] of this.sessions) if (s.closed) this.sessions.delete(key);
+  }
   private idle: number;
   constructor(opts: { idleTimeoutMs?: number } = {}) { this.idle = limit(opts.idleTimeoutMs, 60_000); }
   close() {
@@ -25,6 +29,7 @@ export class AcpSessionPool {
   }
   async run(name: string, config: AcpAgentConfig, cwd: string, task: string, signal?: AbortSignal): Promise<string> {
     if (task.length > 100_000) throw new Error("ACP task too long");
+    if (!config.command || !Array.isArray(config.args) || !config.args.every(a => typeof a === "string")) throw new Error("Invalid ACP executable configuration");
     if (signal?.aborted) throw new Error("ACP task cancelled");
     const total = limit(config.timeoutMs, 600_000);
     const startup = limit(config.startupTimeoutMs, 30_000);
@@ -33,7 +38,13 @@ export class AcpSessionPool {
     let s = this.sessions.get(key);
     if (s?.closed) { this.sessions.delete(key); s = undefined; }
     if (s?.busy || this.opening.has(key)) throw new Error("ACP agent session busy");
-    if (!s && this.sessions.size + this.opening.size >= 2) throw new Error("ACP session limit reached");
+    this.evictClosed();
+    if (!s && this.sessions.size + this.opening.size >= 2) {
+      const idle = [...this.sessions.entries()].find(([, item]) => !item.busy);
+      if (!idle) throw new Error("ACP session limit reached");
+      idle[1].stop(new Error("ACP idle session evicted"));
+      this.sessions.delete(idle[0]);
+    }
     this.opening.add(key);
     if (!s) { s = this.create(config, cwd); this.sessions.set(key, s); }
     const current = s;
@@ -91,6 +102,7 @@ export class AcpSessionPool {
   }
   private create(config: AcpAgentConfig, cwd: string): Session {
     const child = spawn(config.command, config.args, { cwd, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+    const decoder = new StringDecoder("utf8");
     const s: Session = {
       child, id: "", seq: 0, buffer: "", pending: new Map(), busy: false, closed: false, output: "",
       stop(error) {
@@ -113,11 +125,12 @@ export class AcpSessionPool {
       },
     };
     child.on("error", () => s.stop(new Error("ACP process failed")));
+    child.stdin?.on("error", () => s.stop(new Error("ACP transport failed")));
     child.on("close", () => s.stop(new Error("ACP process closed")));
     child.stderr?.on("data", () => {});
     child.stdout?.on("data", (chunk: Buffer) => {
       if (s.closed) return;
-      s.buffer += chunk.toString("utf8");
+      s.buffer += decoder.write(chunk);
       if (Buffer.byteLength(s.buffer) > 1024 * 1024) return s.stop(new Error("ACP frame too large"));
       let i: number;
       while ((i = s.buffer.indexOf("\n")) >= 0 && !s.closed) {
