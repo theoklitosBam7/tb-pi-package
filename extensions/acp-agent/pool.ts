@@ -203,7 +203,16 @@ export class AcpSessionPool {
         if (!line.trim()) continue;
         try {
           const frame = JSON.parse(line);
-          if (frame?.jsonrpc !== "2.0") throw new Error("Invalid ACP message");
+          if (frame?.jsonrpc !== "2.0" || typeof frame !== "object" ||
+              (typeof frame.method !== "string" &&
+                !(typeof frame.id === "string" || typeof frame.id === "number"))) {
+            throw new Error("Invalid ACP message");
+          }
+          if (typeof frame.method === "string" &&
+              (!frame.method.length || (frame.id !== undefined &&
+              !(typeof frame.id === "string" || typeof frame.id === "number")))) {
+            throw new Error("Invalid ACP message");
+          }
           s.activity?.();
           if (typeof frame.method === "string") {
             if (frame.id !== undefined) {
