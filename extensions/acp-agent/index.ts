@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { AcpAgentConfig } from "./client.js";
+import type { AcpAgentConfig } from "./pool.js";
 import { AcpSessionPool } from "./pool.js";
 
 const CONFIG = path.join(os.homedir(), ".pi", "agent", "acp-agents.json");
@@ -69,13 +69,13 @@ export default function (pi: ExtensionAPI) {
         active++;
         try {
           const output = await pool.run(params.agent, agents[params.agent], ctx.cwd, params.task, signal);
-          return { content: [{ type: "text" as const, text: output || "(ACP agent returned no text)" }] };
+          return { content: [{ type: "text" as const, text: output || "(ACP agent returned no text)" }], details: {} };
         } finally {
           active--;
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown ACP failure";
-        return { content: [{ type: "text" as const, text: message }], isError: true };
+        return { content: [{ type: "text" as const, text: message }], details: {}, isError: true };
       }
     },
   });
