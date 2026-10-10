@@ -192,43 +192,70 @@ describe("ACP host process safety", () => {
 });
 
 describe("ACP validation and limits", () => {
-  const silent = 'process.stdin.resume();';
+  const silent = "process.stdin.resume();";
   const run = async (code: string, overrides: Record<string, number> = {}, task = "review") => {
     const pool = new AcpSessionPool();
     try {
-      return await pool.run("limits", {
-        command: process.execPath, args: ["-e", code],
-        startupTimeoutMs: 500, inactivityTimeoutMs: 500, timeoutMs: 500, ...overrides,
-      }, process.cwd(), task);
-    } finally { pool.close(); }
+      return await pool.run(
+        "limits",
+        {
+          command: process.execPath,
+          args: ["-e", code],
+          startupTimeoutMs: 500,
+          inactivityTimeoutMs: 500,
+          timeoutMs: 500,
+          ...overrides,
+        },
+        process.cwd(),
+        task,
+      );
+    } finally {
+      pool.close();
+    }
   };
   it("rejects missing executable", async () => {
     const pool = new AcpSessionPool();
     try {
-      await expect(pool.run("missing", {command: "/nonexistent/acp-agent", args: []}, process.cwd(), "hi")).rejects.toThrow();
-    } finally { pool.close(); }
+      await expect(
+        pool.run("missing", { command: "/nonexistent/acp-agent", args: [] }, process.cwd(), "hi"),
+      ).rejects.toThrow();
+    } finally {
+      pool.close();
+    }
   });
   it("rejects oversized tasks", async () => {
     await expect(run(silent, {}, "x".repeat(100_001))).rejects.toThrow(/too long/);
   });
   it("rejects invalid timeout bounds", async () => {
-    await expect(run(silent, {timeoutMs: 3_600_001})).rejects.toThrow(/Invalid ACP timeout/);
+    await expect(run(silent, { timeoutMs: 3_600_001 })).rejects.toThrow(/Invalid ACP timeout/);
   });
   it("enforces startup timeout", async () => {
-    await expect(run(silent, {startupTimeoutMs: 40, timeoutMs: 700, inactivityTimeoutMs: 700})).rejects.toThrow(/startup timed out/);
+    await expect(
+      run(silent, { startupTimeoutMs: 40, timeoutMs: 700, inactivityTimeoutMs: 700 }),
+    ).rejects.toThrow(/startup timed out/);
   });
   it("enforces inactivity timeout", async () => {
-    await expect(run(silent, {startupTimeoutMs: 700, timeoutMs: 700, inactivityTimeoutMs: 40})).rejects.toThrow(/inactivity timed out/);
+    await expect(
+      run(silent, { startupTimeoutMs: 700, timeoutMs: 700, inactivityTimeoutMs: 40 }),
+    ).rejects.toThrow(/inactivity timed out/);
   });
   it("enforces active task deadline", async () => {
-    await expect(run(silent, {startupTimeoutMs: 700, timeoutMs: 40, inactivityTimeoutMs: 700})).rejects.toThrow(/task timed out/);
+    await expect(
+      run(silent, { startupTimeoutMs: 700, timeoutMs: 40, inactivityTimeoutMs: 700 }),
+    ).rejects.toThrow(/task timed out/);
   });
   it("rejects incomplete JSON-RPC messages rather than extending inactivity", async () => {
-    const code = 'process.stdin.resume();setInterval(()=>process.stdout.write(JSON.stringify({jsonrpc:"2.0"})+"\\n"),20);';
-    await expect(run(code, {startupTimeoutMs: 700, timeoutMs: 600, inactivityTimeoutMs: 100})).rejects.toThrow(/Invalid ACP message/);
+    const code =
+      'process.stdin.resume();setInterval(()=>process.stdout.write(JSON.stringify({jsonrpc:"2.0"})+"\\n"),20);';
+    await expect(
+      run(code, { startupTimeoutMs: 700, timeoutMs: 600, inactivityTimeoutMs: 100 }),
+    ).rejects.toThrow(/Invalid ACP message/);
   });
   it("rejects agent client requests and continues", async () => {
-    const code = fixture.replace('if(m.method==="session/prompt"){ prompts++;', 'if(m.method==="session/prompt"){ send({jsonrpc:"2.0",id:77,method:"fs/read_text_file",params:{}}); prompts++;');
+    const code = fixture.replace(
+      'if(m.method==="session/prompt"){ prompts++;',
+      'if(m.method==="session/prompt"){ send({jsonrpc:"2.0",id:77,method:"fs/read_text_file",params:{}}); prompts++;',
+    );
     await expect(run(code)).resolves.toBe("1");
   });
   it("limits oversized stdout frames", async () => {
@@ -236,7 +263,7 @@ describe("ACP validation and limits", () => {
     await expect(run(code)).rejects.toThrow(/frame too large/);
   });
   it("limits accumulated agent text", async () => {
-    const code = fixture.replace('text:String(prompts)', 'text:"x".repeat(270000)');
+    const code = fixture.replace("text:String(prompts)", 'text:"x".repeat(270000)');
     await expect(run(code)).rejects.toThrow(/output too large/);
   });
 });
