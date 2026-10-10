@@ -54,7 +54,7 @@ describe("subagent inspector registration", () => {
     expect(shortcuts["ctrl+shift+a"]?.description).toContain("running");
   });
 
-  it("closes its overlay only once through pi's custom UI completion", async () => {
+  it("closes its inline panel only once through pi's custom UI completion", async () => {
     const { commands } = registration();
     let component: AgentInspectorComponent | undefined;
     const hide = vi.fn();
@@ -72,7 +72,7 @@ describe("subagent inspector registration", () => {
                 resolve();
               },
             );
-            options.onHandle?.({ hide });
+            expect(options).toBeUndefined();
           }),
       },
     });

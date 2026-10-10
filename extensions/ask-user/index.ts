@@ -271,7 +271,7 @@ function createQuestionComponent(
         1,
         0,
       ).render(width);
-      // Pi clips overlays at maxHeight. Reserve question, selection, and footer first.
+      // Reserve question, selection, and footer before allocating preview rows.
       const budget = Math.max(1, Math.min(24, tui.terminal.rows - 2) - 2);
       const available = budget - header.length - prompt.length - footer.length;
       const desiredRows = Math.max(
@@ -544,10 +544,8 @@ export default function askUser(pi: ExtensionAPI): void {
       if (ctx.mode === "tui" && ctx.hasUI) {
         return result(
           await collectAnswers(params.questions, (question) =>
-            ctx.ui.custom<QuestionInteraction>(
-              (tui, theme, keybindings, done) =>
-                createQuestionComponent(question, tui, theme, keybindings, signal, done),
-              { overlay: true, overlayOptions: { width: "100%", maxHeight: 24, margin: 1 } },
+            ctx.ui.custom<QuestionInteraction>((tui, theme, keybindings, done) =>
+              createQuestionComponent(question, tui, theme, keybindings, signal, done),
             ),
           ),
         );

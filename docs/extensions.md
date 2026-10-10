@@ -24,6 +24,8 @@ Each extension below ships with this package and loads automatically in pi.
 | `options`  | no       | Selectable options. Each has a `label` and an optional `description`. |
 | `is_other` | no       | Adds a free-text option.                                              |
 
+In TUI mode, each question replaces the input area below the transcript while open. Image previews remain in the transcript and cannot cover question text. Answering or cancelling restores the input area. RPC mode continues to use the client's dialogs.
+
 ## web_search and web_fetch
 
 `web_search` finds DuckDuckGo results; `web_fetch` reads public pages as text or Markdown. See [Web search and fetch](web-search.md) for examples, limits, pagination, and source-trust guidance.
