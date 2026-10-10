@@ -618,6 +618,7 @@ describe("subagent inspector TUI", () => {
       clearScreen() {},
       setTitle() {},
       setProgress() {},
+      setProgramStatus() {},
     };
     const tui = new TuiMainScreen(terminal);
     cleanup.push(() => tui.stop());

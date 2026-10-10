@@ -1,6 +1,11 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI, KeybindingsManager } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "./agents.js";
 
 const MAX_COMPLETED_RUNS = 50;
@@ -320,8 +325,9 @@ export class AgentInspectorComponent {
       else if (matches("tui.select.pageUp")) this.detailOffset = Math.max(0, current - page);
       else if (matches("tui.select.pageDown"))
         this.detailOffset = Math.min(maxOffset, current + page);
-      else if (matches("tui.altScreen.top")) this.detailOffset = 0;
-      else if (matches("tui.altScreen.bottom")) this.detailOffset = maxOffset;
+      else if (matches("tui.altScreen.top") || matchesKey(data, "home")) this.detailOffset = 0;
+      else if (matches("tui.altScreen.bottom") || matchesKey(data, "end"))
+        this.detailOffset = maxOffset;
       else return;
       this.followLatest = this.detailOffset === maxOffset;
     } else if (matches("tui.select.up")) this.moveSelection(runs, -1);
