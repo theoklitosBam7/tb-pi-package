@@ -55,11 +55,11 @@ restoring an ACP session after Pi restarts is not supported.
 All settings are optional, per-agent, in milliseconds. Allowed values are
 1 through 3,600,000 ms (60 minutes). Defaults:
 
-| Setting | Default | Behavior |
-| --- | --- | --- |
-| `startupTimeoutMs` | 30,000 | Initialize response must arrive before this deadline |
-| `timeoutMs` | 600,000 | Deadline for each task, including agent startup on its first task |
-| `inactivityTimeoutMs` | 120,000 | Valid ACP messages reset this deadline |
+| Setting               | Default | Behavior                                                          |
+| --------------------- | ------- | ----------------------------------------------------------------- |
+| `startupTimeoutMs`    | 30,000  | Initialize response must arrive before this deadline              |
+| `timeoutMs`           | 600,000 | Deadline for each task, including agent startup on its first task |
+| `inactivityTimeoutMs` | 120,000 | Valid ACP messages reset this deadline                            |
 
 Each task starts a new overall deadline, even when the ACP process is reused.\nThe task deadline cannot be reset by agent output. Long tasks can run if
 they continue sending protocol messages, but they still stop at `timeoutMs`.
