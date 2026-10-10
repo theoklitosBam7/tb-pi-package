@@ -73,7 +73,7 @@ describe("ACP transport regressions", () => {
     } finally { pool.close(); }
   });
   it("reclaims capacity when an idle agent exits", async () => {
-    const exiting = fixture + "\\nprocess.stdin.on('data',()=>setTimeout(()=>process.exit(0),40));";
+    const exiting = fixture + "\nprocess.stdin.on('data',()=>setTimeout(()=>process.exit(0),40));";
     const pool = new AcpSessionPool({ idleTimeoutMs: 5000 });
     try {
       expect(await pool.run("A", { command: process.execPath, args: ["-e", exiting] }, process.cwd(), "a")).toBe("1");
@@ -118,7 +118,7 @@ describe("ACP host process safety", () => {
       'try {await pool.run("agent",a,process.cwd(),"second");process.exitCode=2;}',
       'catch(e){if(!/transport|process|closed/i.test(String(e)))process.exitCode=3;}',
       '}finally{pool.close();}})().catch(e=>{console.error(e);process.exitCode=4});',
-    ].join("\\n");
+    ].join("\n");
     const file = new URL("./pool.ts", import.meta.url);
     const result = spawnSync(process.execPath, ["-e", host, file.pathname], {
       cwd: process.cwd(), encoding: "utf8", timeout: 5000,
