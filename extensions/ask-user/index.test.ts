@@ -1,6 +1,7 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionToolContext,
   KeybindingsManager as AppKeybindingsManager,
   Theme,
   ToolDefinition,
@@ -31,12 +32,22 @@ function registeredTool(): RegisteredAskUserTool {
   return tool;
 }
 
-function context(mode: ExtensionContext["mode"], ui: Record<string, unknown>): ExtensionContext {
-  return {
+function context(
+  mode: ExtensionContext["mode"],
+  ui: Record<string, unknown>,
+): ExtensionToolContext {
+  const extensionContext = {
     mode,
     hasUI: mode === "tui" || mode === "rpc",
     ui,
   } as unknown as ExtensionContext;
+  return {
+    ...extensionContext,
+    tools: [],
+    async executeTool() {
+      throw new Error("Nested tool execution is not supported by this test context");
+    },
+  };
 }
 
 type AskUserTestQuestion = Parameters<RegisteredAskUserTool["execute"]>[1]["questions"][number];
@@ -335,6 +346,8 @@ describe("ask_user", () => {
       {
         args: { questions: [] },
         toolCallId: "call-legacy",
+        durationMs: undefined,
+        outputPad: 0,
         invalidate: vi.fn(),
         lastComponent: undefined,
         state: {},

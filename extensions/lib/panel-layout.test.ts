@@ -56,6 +56,7 @@ function panelHarness() {
     clearScreen: vi.fn(),
     setTitle: vi.fn(),
     setProgress: vi.fn(),
+    setProgramStatus: vi.fn(),
   };
   const tui = new TuiMainScreen(terminal);
   const transcript = new Container();
