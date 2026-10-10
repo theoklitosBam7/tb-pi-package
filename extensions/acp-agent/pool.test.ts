@@ -82,6 +82,15 @@ describe("ACP transport regressions", () => {
       expect(await pool.run("C", agent, process.cwd(), "c")).toBe("1");
     } finally { pool.close(); }
   });
+  it("evicts an idle session when a third agent needs capacity", async () => {
+    const pool = new AcpSessionPool({ idleTimeoutMs: 5000 });
+    try {
+      expect(await pool.run("A", agent, process.cwd(), "first")).toBe("1");
+      expect(await pool.run("B", agent, process.cwd(), "second")).toBe("1");
+      expect(await pool.run("C", agent, process.cwd(), "third")).toBe("1");
+      expect(await pool.run("A", agent, process.cwd(), "fourth")).toBe("1");
+    } finally { pool.close(); }
+  });
   it("applies timeoutMs to each prompt, not process lifetime", async () => {
     const pool = new AcpSessionPool({ idleTimeoutMs: 5000 });
     const short = { ...agent, timeoutMs: 800 };
