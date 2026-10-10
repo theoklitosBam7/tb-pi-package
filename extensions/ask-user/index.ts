@@ -108,6 +108,7 @@ function optionAnswer(id: string, option: AskUserOption): AskUserAnswer {
 
 function createQuestionComponent(
   question: AskUserQuestion,
+  progress: string,
   tui: TUI,
   theme: Theme,
   keybindings: KeybindingsManager,
@@ -172,7 +173,11 @@ function createQuestionComponent(
   const container = new Container();
 
   function createQuestionHeader(): Text {
-    return new Text(theme.fg("accent", theme.bold(question.header ?? "Ask user")), 1, 0);
+    return new Text(
+      theme.fg("accent", theme.bold(`${progress} ${question.header ?? "Ask user"}`)),
+      1,
+      0,
+    );
   }
 
   function createQuestionPrompt(): Text {
@@ -436,12 +441,12 @@ function rpcSelect(
 
 async function collectAnswers(
   questions: AskUserQuestion[],
-  ask: (question: AskUserQuestion) => Promise<QuestionInteraction>,
+  ask: (question: AskUserQuestion, index: number) => Promise<QuestionInteraction>,
 ): Promise<AskUserDetails> {
   const answers: AskUserAnswer[] = [];
 
-  for (const question of questions) {
-    const interaction = await ask(question);
+  for (const [index, question] of questions.entries()) {
+    const interaction = await ask(question, index);
     if (interaction.kind === "cancelled") {
       return { status: "cancelled", cancelled: true, answers: answersById(answers) };
     }
@@ -543,9 +548,17 @@ export default function askUser(pi: ExtensionAPI): void {
 
       if (ctx.mode === "tui" && ctx.hasUI) {
         return result(
-          await collectAnswers(params.questions, (question) =>
+          await collectAnswers(params.questions, (question, index) =>
             ctx.ui.custom<QuestionInteraction>((tui, theme, keybindings, done) =>
-              createQuestionComponent(question, tui, theme, keybindings, signal, done),
+              createQuestionComponent(
+                question,
+                `${index + 1}/${params.questions.length}`,
+                tui,
+                theme,
+                keybindings,
+                signal,
+                done,
+              ),
             ),
           ),
         );

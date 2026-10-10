@@ -96,6 +96,45 @@ function tuiQuestion(
 }
 
 describe("ask_user", () => {
+  it("shows question progress across choice, custom-answer, and text-input panels", async () => {
+    const panels: string[] = [];
+    const ui = tuiQuestion(
+      [
+        {
+          id: "choice",
+          header: "Choice",
+          question: "Choose one?",
+          options: [{ label: "Default" }],
+          is_other: true,
+        },
+        { id: "note", question: "Any notes?" },
+      ],
+      20,
+      80,
+      (component) => {
+        panels.push(component.render(80).join("\n"));
+        if (panels.length === 1) {
+          component.handleInput?.("\x1b[B");
+          component.handleInput?.("\r");
+          panels.push(component.render(80).join("\n"));
+          component.handleInput?.("\x1b");
+          panels.push(component.render(80).join("\n"));
+          component.handleInput?.("\x1b[A");
+        } else {
+          component.handleInput?.("N");
+        }
+        component.handleInput?.("\r");
+      },
+    );
+
+    await expect(ui.execution).resolves.toMatchObject({ details: { status: "completed" } });
+    expect(panels[0]).toContain("1/2 Choice");
+    expect(panels[1]).toContain("1/2 Choice");
+    expect(panels[1]).toContain("Your answer:");
+    expect(panels[2]).toContain("1/2 Choice");
+    expect(panels[3]).toContain("2/2 Ask user");
+    expect(panels[3]).toContain("Your answer:");
+  });
   it("frames and fills the focused question in choice and text modes", async () => {
     for (const question of [
       { id: "choice", question: "Choose a release?", options: [{ label: "Rolling release" }] },
@@ -103,6 +142,7 @@ describe("ask_user", () => {
     ]) {
       const ui = tuiQuestion(question, 12, 28);
       const lines = ui.view.render(28);
+      expect(lines.join("\n")).toContain("1/1 Ask user");
       expect(lines[0]).toContain("─");
       expect(lines.at(-1)).toContain("─");
       expect(lines.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│"))).toBe(
