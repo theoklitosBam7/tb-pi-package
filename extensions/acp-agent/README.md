@@ -58,10 +58,10 @@ All settings are optional, per-agent, in milliseconds. Allowed values are
 | Setting | Default | Behavior |
 | --- | --- | --- |
 | `startupTimeoutMs` | 30,000 | Initialize response must arrive before this deadline |
-| `timeoutMs` | 600,000 | Absolute deadline from process launch |
+| `timeoutMs` | 600,000 | Deadline for each task, including agent startup on its first task |
 | `inactivityTimeoutMs` | 120,000 | Valid ACP messages reset this deadline |
 
-The overall deadline cannot be reset by agent output. Long tasks can run if
+Each task starts a new overall deadline, even when the ACP process is reused.\nThe task deadline cannot be reset by agent output. Long tasks can run if
 they continue sending protocol messages, but they still stop at `timeoutMs`.
 A slow but quiet agent may hit `inactivityTimeoutMs` first. Cancellation
 remains available at all times.
@@ -70,8 +70,16 @@ remains available at all times.
 
 The extension now reuses one ACP process and session for sequential tasks to the
 same agent, executable configuration, working directory, and timeout settings.
-Different workspaces use different sessions. Two sessions are allowed in total.
+Different workspaces use different sessions. Two sessions are allowed in total.\nWhen both slots contain idle sessions, the oldest available idle session is closed\nto make room for a new agent or workspace.
 Concurrent tasks for one session are rejected rather than interleaved.
 Idle sessions are closed after 60 seconds. An error, cancellation, or Pi shutdown
-closes the related process. This avoids repeated startup cost, but means the
+closes the related direct child process. Descendant processes are not guaranteed\nto stop. This avoids repeated startup cost, but means the
 agent can retain prior task context and has access to the same workspace.
+
+## Adapter verification before merge
+
+This is a local ACP v1 client with no tested vendor-specific compatibility guarantee.
+Before declaring Claude, Codex, or Gemini adapters supported, test and record an
+exact adapter executable and version for initialization, prompt, cancellation,
+repeated prompts, and refusal of client filesystem, terminal, and permission
+requests. An adapter that requires these client methods may not work.
