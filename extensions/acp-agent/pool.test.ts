@@ -62,3 +62,32 @@ describe("persistent ACP sessions", () => {
     } finally { pool.close(); }
   });
 });
+
+describe("ACP transport regressions", () => {
+  it("returns UTF-8 text split between stdout writes", async () => {
+    const script = "let b=\"\";process.stdin.on(\"data\",c=>{b+=c;let i;while((i=b.indexOf(\"\\n\"))>=0){const m=JSON.parse(b.slice(0,i));b=b.slice(i+1);const send=x=>process.stdout.write(JSON.stringify(x)+\"\\n\");if(m.method===\"initialize\")send({jsonrpc:\"2.0\",id:m.id,result:{protocolVersion:1}});if(m.method===\"session/new\")send({jsonrpc:\"2.0\",id:m.id,result:{sessionId:\"s\"}});if(m.method===\"session/prompt\"){const str=JSON.stringify({jsonrpc:\"2.0\",method:\"session/update\",params:{sessionId:\"s\",update:{sessionUpdate:\"agent_message_chunk\",content:{type:\"text\",text:\"α\"}}}})+\"\\n\";const bytes=Buffer.from(str);const at=bytes.indexOf(Buffer.from(\"α\"))+1;process.stdout.write(bytes.subarray(0,at));setTimeout(()=>{process.stdout.write(bytes.subarray(at));send({jsonrpc:\"2.0\",id:m.id,result:{stopReason:\"end_turn\"}})},20)}}});";
+    const pool = new AcpSessionPool();
+    try {
+      expect(await pool.run("utf8", { command: process.execPath, args: ["-e", script] }, process.cwd(), "hello")).toBe("α");
+    } finally { pool.close(); }
+  });
+  it("reclaims capacity when an idle agent exits", async () => {
+    const exiting = fixture + "\\nprocess.stdin.on('data',()=>setTimeout(()=>process.exit(0),40));";
+    const pool = new AcpSessionPool({ idleTimeoutMs: 5000 });
+    try {
+      expect(await pool.run("A", { command: process.execPath, args: ["-e", exiting] }, process.cwd(), "a")).toBe("1");
+      expect(await pool.run("B", agent, process.cwd(), "b")).toBe("1");
+      await new Promise(resolve => setTimeout(resolve, 150));
+      expect(await pool.run("C", agent, process.cwd(), "c")).toBe("1");
+    } finally { pool.close(); }
+  });
+  it("applies timeoutMs to each prompt, not process lifetime", async () => {
+    const pool = new AcpSessionPool({ idleTimeoutMs: 5000 });
+    const short = { ...agent, timeoutMs: 800 };
+    try {
+      expect(await pool.run("test", short, process.cwd(), "first")).toBe("1");
+      await new Promise(resolve => setTimeout(resolve, 900));
+      expect(await pool.run("test", short, process.cwd(), "second")).toBe("2");
+    } finally { pool.close(); }
+  });
+});
