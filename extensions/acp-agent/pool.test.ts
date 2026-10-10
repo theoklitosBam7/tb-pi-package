@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { AcpSessionPool } from "./pool.js";
 
@@ -89,5 +90,41 @@ describe("ACP transport regressions", () => {
       await new Promise(resolve => setTimeout(resolve, 900));
       expect(await pool.run("test", short, process.cwd(), "second")).toBe("2");
     } finally { pool.close(); }
+  });
+});
+
+describe("ACP host process safety", () => {
+  it("reports EPIPE without terminating the Pi host", () => {
+    const host = [
+      'const ts=require("typescript");',
+      'const fs=require("node:fs");',
+      'const Module=require("node:module");',
+      'const file=process.argv[1];',
+      'const js=ts.transpileModule(fs.readFileSync(file,"utf8"),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;',
+      'const mod=new Module(file,module);mod.filename=file;mod.paths=Module._nodeModulePaths(process.cwd());mod._compile(js,file);',
+      'const agentCode=' + JSON.stringify([
+        'process.stdin.setEncoding("utf8");let b="";',
+        'process.stdin.on("data",x=>{b+=x;let i;while((i=b.indexOf("\\n"))>=0){',
+        'const m=JSON.parse(b.slice(0,i));b=b.slice(i+1);',
+        'const send=o=>process.stdout.write(JSON.stringify(o)+"\\n");',
+        'if(m.method==="initialize")send({jsonrpc:"2.0",id:m.id,result:{protocolVersion:1}});',
+        'if(m.method==="session/new")send({jsonrpc:"2.0",id:m.id,result:{sessionId:"s"}});',
+        'if(m.method==="session/prompt"){send({jsonrpc:"2.0",id:m.id,result:{stopReason:"end_turn"}});process.stdin.destroy();setInterval(()=>{},1000).unref();}',
+        '}});',
+      ].join("")) + ';',
+      '(async()=>{const pool=new mod.exports.AcpSessionPool();try {',
+      'const a={command:process.execPath,args:["-e",agentCode],timeoutMs:1500,startupTimeoutMs:1000,inactivityTimeoutMs:1000};',
+      'await pool.run("agent",a,process.cwd(),"first");',
+      'try {await pool.run("agent",a,process.cwd(),"second");process.exitCode=2;}',
+      'catch(e){if(!/transport|process|closed/i.test(String(e)))process.exitCode=3;}',
+      '}finally{pool.close();}})().catch(e=>{console.error(e);process.exitCode=4});',
+    ].join("\\n");
+    const file = new URL("./pool.ts", import.meta.url);
+    const result = spawnSync(process.execPath, ["-e", host, file.pathname], {
+      cwd: process.cwd(), encoding: "utf8", timeout: 5000,
+    });
+    expect({ status: result.status, signal: result.signal, stderr: result.stderr }).toEqual({
+      status: 0, signal: null, stderr: "",
+    });
   });
 });
