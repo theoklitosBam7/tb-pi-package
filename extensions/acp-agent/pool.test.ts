@@ -109,7 +109,7 @@ describe("ACP host process safety", () => {
         'const send=o=>process.stdout.write(JSON.stringify(o)+"\\n");',
         'if(m.method==="initialize")send({jsonrpc:"2.0",id:m.id,result:{protocolVersion:1}});',
         'if(m.method==="session/new")send({jsonrpc:"2.0",id:m.id,result:{sessionId:"s"}});',
-        'if(m.method==="session/prompt"){send({jsonrpc:"2.0",id:m.id,result:{stopReason:"end_turn"}});process.stdin.destroy();setInterval(()=>{},1000).unref();}',
+        'if(m.method==="session/prompt"){send({jsonrpc:"2.0",id:m.id,result:{stopReason:"end_turn"}});process.stdin.destroy();setInterval(()=>{},1000);}',
         '}});',
       ].join("")) + ';',
       '(async()=>{const pool=new mod.exports.AcpSessionPool();try {',
