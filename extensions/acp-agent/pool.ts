@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-import type { AcpAgentConfig } from "./client.js";
+export interface AcpAgentConfig {
+  command: string;
+  args: string[];
+  timeoutMs?: number;
+  startupTimeoutMs?: number;
+  inactivityTimeoutMs?: number;
+}
 
 type Waiter = { resolve: (value: any) => void; reject: (error: Error) => void };
 type Session = {
