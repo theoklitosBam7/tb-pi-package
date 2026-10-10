@@ -217,10 +217,7 @@ describe("ask_user", () => {
       12,
       24,
     );
-    expect(ui.custom.mock.calls[0]?.[1]).toMatchObject({
-      overlay: true,
-      overlayOptions: { maxHeight: 24 },
-    });
+    expect(ui.custom.mock.calls[0]?.[1]).toBeUndefined();
     for (let i = 0; i < 10; i++) ui.view.handleInput?.("\x1b[B");
     for (const [rows, columns] of [
       [12, 24],
