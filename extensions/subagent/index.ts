@@ -888,22 +888,11 @@ export default function (pi: ExtensionAPI) {
     activeInspectorClose = close;
 
     try {
-      await ctx.ui.custom<void>(
-        (tui, theme, keybindings, done) => {
-          finishCustom = done;
-          component = new AgentInspectorComponent(tui, theme, keybindings, inspector, close);
-          return component;
-        },
-        {
-          overlay: true,
-          overlayOptions: {
-            width: "80%",
-            minWidth: 40,
-            maxHeight: "80%",
-            anchor: "center",
-          },
-        },
-      );
+      await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
+        finishCustom = done;
+        component = new AgentInspectorComponent(tui, theme, keybindings, inspector, close);
+        return component;
+      });
     } finally {
       close();
     }

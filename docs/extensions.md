@@ -24,6 +24,8 @@ Each extension below ships with this package and loads automatically in pi.
 | `options`  | no       | Selectable options. Each has a `label` and an optional `description`. |
 | `is_other` | no       | Adds a free-text option.                                              |
 
+In TUI mode, each question replaces the input area below the transcript while open. The panel header shows the current question number and total, such as `1/8` or `2/8`. A single question shows `1/1`. The counter stays the same when you enter or leave a custom answer. Image previews remain in the transcript and cannot cover question text. Answering or cancelling restores the input area. RPC mode continues to use the client's dialogs.
+
 ## web_search and web_fetch
 
 `web_search` finds DuckDuckGo results; `web_fetch` reads public pages as text or Markdown. See [Web search and fetch](web-search.md) for examples, limits, pagination, and source-trust guidance.

@@ -1,6 +1,7 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionToolContext,
   KeybindingsManager as AppKeybindingsManager,
   Theme,
   ToolDefinition,
@@ -31,12 +32,22 @@ function registeredTool(): RegisteredAskUserTool {
   return tool;
 }
 
-function context(mode: ExtensionContext["mode"], ui: Record<string, unknown>): ExtensionContext {
-  return {
+function context(
+  mode: ExtensionContext["mode"],
+  ui: Record<string, unknown>,
+): ExtensionToolContext {
+  const extensionContext = {
     mode,
     hasUI: mode === "tui" || mode === "rpc",
     ui,
   } as unknown as ExtensionContext;
+  return {
+    ...extensionContext,
+    tools: [],
+    async executeTool() {
+      throw new Error("Nested tool execution is not supported by this test context");
+    },
+  };
 }
 
 type AskUserTestQuestion = Parameters<RegisteredAskUserTool["execute"]>[1]["questions"][number];
@@ -96,6 +107,45 @@ function tuiQuestion(
 }
 
 describe("ask_user", () => {
+  it("shows question progress across choice, custom-answer, and text-input panels", async () => {
+    const panels: string[] = [];
+    const ui = tuiQuestion(
+      [
+        {
+          id: "choice",
+          header: "Choice",
+          question: "Choose one?",
+          options: [{ label: "Default" }],
+          is_other: true,
+        },
+        { id: "note", question: "Any notes?" },
+      ],
+      20,
+      80,
+      (component) => {
+        panels.push(component.render(80).join("\n"));
+        if (panels.length === 1) {
+          component.handleInput?.("\x1b[B");
+          component.handleInput?.("\r");
+          panels.push(component.render(80).join("\n"));
+          component.handleInput?.("\x1b");
+          panels.push(component.render(80).join("\n"));
+          component.handleInput?.("\x1b[A");
+        } else {
+          component.handleInput?.("N");
+        }
+        component.handleInput?.("\r");
+      },
+    );
+
+    await expect(ui.execution).resolves.toMatchObject({ details: { status: "completed" } });
+    expect(panels[0]).toContain("1/2 Choice");
+    expect(panels[1]).toContain("1/2 Choice");
+    expect(panels[1]).toContain("Your answer:");
+    expect(panels[2]).toContain("1/2 Choice");
+    expect(panels[3]).toContain("2/2 Ask user");
+    expect(panels[3]).toContain("Your answer:");
+  });
   it("frames and fills the focused question in choice and text modes", async () => {
     for (const question of [
       { id: "choice", question: "Choose a release?", options: [{ label: "Rolling release" }] },
@@ -103,6 +153,7 @@ describe("ask_user", () => {
     ]) {
       const ui = tuiQuestion(question, 12, 28);
       const lines = ui.view.render(28);
+      expect(lines.join("\n")).toContain("1/1 Ask user");
       expect(lines[0]).toContain("─");
       expect(lines.at(-1)).toContain("─");
       expect(lines.slice(1, -1).every((line) => line.startsWith("│") && line.endsWith("│"))).toBe(
@@ -217,10 +268,7 @@ describe("ask_user", () => {
       12,
       24,
     );
-    expect(ui.custom.mock.calls[0]?.[1]).toMatchObject({
-      overlay: true,
-      overlayOptions: { maxHeight: 24 },
-    });
+    expect(ui.custom.mock.calls[0]?.[1]).toBeUndefined();
     for (let i = 0; i < 10; i++) ui.view.handleInput?.("\x1b[B");
     for (const [rows, columns] of [
       [12, 24],
@@ -298,6 +346,8 @@ describe("ask_user", () => {
       {
         args: { questions: [] },
         toolCallId: "call-legacy",
+        durationMs: undefined,
+        outputPad: 0,
         invalidate: vi.fn(),
         lastComponent: undefined,
         state: {},

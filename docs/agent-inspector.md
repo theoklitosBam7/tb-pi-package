@@ -4,6 +4,6 @@ In pi's terminal UI, use `/agent-inspector` or press `Ctrl+Shift+A`. Select a ru
 
 Use Up/Down or Page Up/Page Down to scroll. Home shows the start; End follows new output. In a running run's detail view, press `x` to stop that run. The list view ignores `x`. Escape returns to the run list, then closes the inspector. Closing the view does not stop the agent.
 
-The inspector runs in interactive TUI mode only.
+The inspector runs in interactive TUI mode only. It replaces the input area below the transcript while open. This keeps image previews out of the inspector's text. Closing it restores the input area.
 
 The list keeps active runs and up to 50 completed runs in memory. Long output is truncated with a notice. Reloading or leaving the session clears this history; result files are unchanged. `/agents` still browses agent definitions.
