@@ -244,6 +244,38 @@ describe("ACP validation and limits", () => {
       run(silent, { startupTimeoutMs: 700, timeoutMs: 40, inactivityTimeoutMs: 700 }),
     ).rejects.toThrow(/task timed out/);
   });
+  it("rejects a prompt response without a result or error", async () => {
+    const code = fixture.replace(
+      'send({jsonrpc:"2.0",id:m.id,result:{stopReason:"end_turn"}});',
+      'send({jsonrpc:"2.0",id:m.id});',
+    );
+    await expect(run(code)).rejects.toThrow(/Invalid ACP message/);
+  });
+  it("rejects malformed responses instead of letting them extend inactivity", async () => {
+    const code =
+      'process.stdin.resume();setInterval(()=>process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:999})+"\\n"),20);';
+    await expect(
+      run(code, { startupTimeoutMs: 3000, timeoutMs: 3000, inactivityTimeoutMs: 1000 }),
+    ).rejects.toThrow(/Invalid ACP message/);
+  });
+  it.each([
+    ["result and error", '{jsonrpc:"2.0",id:m.id,result:{},error:{code:-32603,message:"failed"}}'],
+    ["invalid error", '{jsonrpc:"2.0",id:m.id,error:{message:"failed"}}'],
+    ["null error", '{jsonrpc:"2.0",id:m.id,error:null}'],
+  ])("rejects a response with %s", async (_name, response) => {
+    const code = fixture.replace(
+      'send({jsonrpc:"2.0",id:m.id,result:{stopReason:"end_turn"}});',
+      `send(${response});`,
+    );
+    await expect(run(code)).rejects.toThrow(/Invalid ACP message/);
+  });
+  it("reports a valid agent error response without exposing its message", async () => {
+    const code = fixture.replace(
+      'send({jsonrpc:"2.0",id:m.id,result:{stopReason:"end_turn"}});',
+      'send({jsonrpc:"2.0",id:m.id,error:{code:-32603,message:"private agent details"}});',
+    );
+    await expect(run(code)).rejects.toThrow("ACP agent returned an error");
+  });
   it("rejects incomplete JSON-RPC messages rather than extending inactivity", async () => {
     const code =
       'process.stdin.resume();setInterval(()=>process.stdout.write(JSON.stringify({jsonrpc:"2.0"})+"\\n"),20);';
@@ -258,9 +290,67 @@ describe("ACP validation and limits", () => {
     );
     await expect(run(code)).resolves.toBe("1");
   });
+  it("accepts a bounded frame completed in the same write as another frame", async () => {
+    const burst = `
+      if (m.method === "session/prompt") {
+        const thought = {
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: {
+            sessionId: "abc",
+            update: {
+              sessionUpdate: "agent_thought_chunk",
+              content: { type: "text", text: "" },
+            },
+          },
+        };
+        thought.params.update.content.text = "x".repeat(
+          1_048_500 - Buffer.byteLength(JSON.stringify(thought)),
+        );
+        const line = JSON.stringify(thought);
+        process.stdout.write(line.slice(0, -10));
+        setTimeout(() => {
+          const message = {
+            jsonrpc: "2.0",
+            method: "session/update",
+            params: {
+              sessionId: "abc",
+              update: {
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: "ok" },
+              },
+            },
+          };
+          const response = { jsonrpc: "2.0", id: m.id, result: { stopReason: "end_turn" } };
+          process.stdout.write(
+            line.slice(-10) + "\\n" + JSON.stringify(message) + "\\n" + JSON.stringify(response) + "\\n",
+          );
+        }, 100);
+        return;
+      }
+    `;
+    const code = fixture.replace(
+      'if(m.method==="session/prompt"){ prompts++;',
+      burst + 'if(m.method==="session/prompt"){ prompts++;',
+    );
+    await expect(run(code, { timeoutMs: 3000, inactivityTimeoutMs: 3000 })).resolves.toBe("ok");
+  });
   it("limits oversized stdout frames", async () => {
     const code = 'process.stdin.resume();process.stdout.write("x".repeat(1048577));';
     await expect(run(code)).rejects.toThrow(/frame too large/);
+  });
+  it("rejects a completed oversized frame even when another frame follows", async () => {
+    const code = fixture.replace(
+      'if(m.method==="session/prompt"){ prompts++;',
+      `if(m.method==="session/prompt"){
+        process.stdout.write(" ".repeat(1_048_577) + "\\n" + JSON.stringify({jsonrpc:"2.0",id:m.id,result:{}}) + "\\n");
+        return;
+      }
+      if(m.method==="session/prompt"){ prompts++;`,
+    );
+    await expect(run(code, { timeoutMs: 3000, inactivityTimeoutMs: 3000 })).rejects.toThrow(
+      /frame too large/,
+    );
   });
   it("limits accumulated agent text", async () => {
     const code = fixture.replace("text:String(prompts)", 'text:"x".repeat(270000)');

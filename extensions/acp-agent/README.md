@@ -1,24 +1,41 @@
 # ACP agent bridge (experimental)
 
-This extension delegates a single task to an ACP **v1** agent over local JSON-RPC stdio.
+This extension delegates a single task to Codex over local ACP v1 JSON-RPC stdio.
+The accepted adapter is [`@agentclientprotocol/codex-acp`](https://github.com/agentclientprotocol/codex-acp).
 
 ## Set up
 
+Install the Codex ACP adapter and record its version and executable path:
+
+```bash
+npm install -g @agentclientprotocol/codex-acp
+codex-acp --version
+command -v codex-acp
+```
+
+The adapter includes a compatible Codex dependency. The `codex` CLI executable
+is not the ACP adapter. Authenticate before using the bridge; the bridge does
+not implement ACP authentication requests.
+
 Create `~/.pi/agent/acp-agents.json` with permissions `0600`.
-Commands **must be absolute paths**. Use the executable that starts your
-ACP-capable agent in stdio mode, with its required arguments. For example:
+Commands must be absolute paths. Replace the adapter path below with the output
+of `command -v codex-acp`:
 
 ```json
 {
-  "my-agent": {
-    "command": "/absolute/path/to/acp-agent",
-    "args": [],
+  "codex": {
+    "command": "/usr/bin/env",
+    "args": ["INITIAL_AGENT_MODE=read-only", "/absolute/path/to/codex-acp"],
     "startupTimeoutMs": 30000,
     "timeoutMs": 600000,
     "inactivityTimeoutMs": 120000
   }
 }
 ```
+
+`/usr/bin/env` sets the adapter's initial mode to read-only without a shell.
+It still passes Pi's environment to the adapter. This setting is not a sandbox
+provided by the bridge.
 
 Run `chmod 600 ~/.pi/agent/acp-agents.json` and restart Pi.
 The extension registers the `acp_agent` tool and `/acp` command.
@@ -61,10 +78,17 @@ All settings are optional, per-agent, in milliseconds. Allowed values are
 | `timeoutMs`           | 600,000 | Deadline for each task, including agent startup on its first task |
 | `inactivityTimeoutMs` | 120,000 | Valid ACP messages reset this deadline                            |
 
-Each task starts a new overall deadline, even when the ACP process is reused.\nThe task deadline cannot be reset by agent output. Long tasks can run if
+Each task starts a new overall deadline, even when the ACP process is reused.
+The task deadline cannot be reset by agent output. JSON-RPC responses must
+contain exactly one of `result` or `error`. Invalid messages fail the task and
+close the session instead of extending inactivity. Long tasks can run if
 they continue sending protocol messages, but they still stop at `timeoutMs`.
 A slow but quiet agent may hit `inactivityTimeoutMs` first. Cancellation
 remains available at all times.
+
+The 1 MiB frame limit applies to each newline-delimited JSON message, excluding
+the newline, and to any incomplete frame. Multiple messages in one stdout write
+do not share a frame-size limit.
 
 ## Persistent sessions
 
@@ -76,10 +100,13 @@ Idle sessions are closed after 60 seconds. An error, cancellation, or Pi shutdow
 closes the related direct child process. Descendant processes are not guaranteed\nto stop. This avoids repeated startup cost, but means the
 agent can retain prior task context and has access to the same workspace.
 
-## Adapter verification before merge
+## Codex verification
 
-This is a local ACP v1 client with no tested vendor-specific compatibility guarantee.
-Before declaring Claude, Codex, or Gemini adapters supported, test and record an
-exact adapter executable and version for initialization, prompt, cancellation,
-repeated prompts, and refusal of client filesystem, terminal, and permission
-requests. An adapter that requires these client methods may not work.
+Codex is the accepted adapter for this experimental bridge. Manual smoke tests
+confirmed initialization, prompt delivery, and retained context across sequential
+prompts. These results do not establish compatibility with every adapter version
+or verify cancellation and process cleanup.
+
+Before merge, record the exact Codex ACP adapter executable and version. Complete
+manual checks for cancellation, task deadlines, process cleanup, and refusal of
+client filesystem, terminal, and permission requests.

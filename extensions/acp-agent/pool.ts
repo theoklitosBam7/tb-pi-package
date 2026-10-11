@@ -1,14 +1,67 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
-export interface AcpAgentConfig {
-  command: string;
-  args: string[];
-  timeoutMs?: number;
-  startupTimeoutMs?: number;
-  inactivityTimeoutMs?: number;
-}
+import { Type, type Static } from "typebox";
+import { Value } from "typebox/value";
 
-type Waiter = { resolve: (value: any) => void; reject: (error: Error) => void };
+const RequestIdSchema = Type.Union([Type.String(), Type.Integer()]);
+const MethodMessageSchema = Type.Object({
+  jsonrpc: Type.Literal("2.0"),
+  method: Type.String({ minLength: 1 }),
+  id: Type.Optional(RequestIdSchema),
+  params: Type.Optional(
+    Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Array(Type.Unknown())]),
+  ),
+  result: Type.Optional(Type.Never()),
+  error: Type.Optional(Type.Never()),
+});
+const ResultMessageSchema = Type.Object({
+  jsonrpc: Type.Literal("2.0"),
+  id: RequestIdSchema,
+  result: Type.Unknown(),
+  error: Type.Optional(Type.Never()),
+  method: Type.Optional(Type.Never()),
+});
+const ErrorMessageSchema = Type.Object({
+  jsonrpc: Type.Literal("2.0"),
+  id: RequestIdSchema,
+  error: Type.Object({
+    code: Type.Integer(),
+    message: Type.String(),
+    data: Type.Optional(Type.Unknown()),
+  }),
+  result: Type.Optional(Type.Never()),
+  method: Type.Optional(Type.Never()),
+});
+const InitializeResultSchema = Type.Object({ protocolVersion: Type.Literal(1) });
+const NewSessionResultSchema = Type.Object({ sessionId: Type.String({ minLength: 1 }) });
+const SessionUpdateSchema = Type.Object({
+  sessionId: Type.String(),
+  update: Type.Object({
+    sessionUpdate: Type.String(),
+    content: Type.Optional(Type.Unknown()),
+  }),
+});
+const ContentHeaderSchema = Type.Object({ type: Type.String() });
+const TextContentSchema = Type.Object({ type: Type.Literal("text"), text: Type.String() });
+
+function parseMessage(line: string) {
+  const value: unknown = JSON.parse(line);
+  if (Value.Check(MethodMessageSchema, value)) return { kind: "method" as const, message: value };
+  if (Value.Check(ResultMessageSchema, value)) return { kind: "result" as const, message: value };
+  if (Value.Check(ErrorMessageSchema, value)) return { kind: "error" as const, message: value };
+  throw new Error("Invalid ACP message");
+}
+export const AcpTimeoutSchema = Type.Integer({ minimum: 1, maximum: 3_600_000 });
+export const AcpAgentConfigSchema = Type.Object({
+  command: Type.String({ minLength: 1 }),
+  args: Type.Array(Type.String()),
+  timeoutMs: Type.Optional(AcpTimeoutSchema),
+  startupTimeoutMs: Type.Optional(AcpTimeoutSchema),
+  inactivityTimeoutMs: Type.Optional(AcpTimeoutSchema),
+});
+export type AcpAgentConfig = Static<typeof AcpAgentConfigSchema>;
+
+type Waiter = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 type Session = {
   child: ReturnType<typeof spawn>;
   id: string;
@@ -21,13 +74,12 @@ type Session = {
   output: string;
   activity?: () => void;
   stop: (error: Error) => void;
-  send: (method: string, params: unknown) => Promise<any>;
+  send: (method: string, params: unknown) => Promise<unknown>;
 };
-const LIMIT = 3_600_000;
 function limit(value: number | undefined, fallback: number) {
-  const n = value ?? fallback;
-  if (!Number.isSafeInteger(n) || n < 1 || n > LIMIT) throw new Error("Invalid ACP timeout");
-  return n;
+  const timeout = value ?? fallback;
+  if (!Value.Check(AcpTimeoutSchema, timeout)) throw new Error("Invalid ACP timeout");
+  return timeout;
 }
 export class AcpSessionPool {
   private sessions = new Map<string, Session>();
@@ -114,11 +166,11 @@ export class AcpSessionPool {
               terminal: false,
             },
           });
-          if (init?.protocolVersion !== 1) throw new Error("Unsupported ACP protocol version");
+          if (!Value.Check(InitializeResultSchema, init))
+            throw new Error("Unsupported ACP protocol version");
           clearTimeout(startupTimer);
           const created = await current.send("session/new", { cwd, mcpServers: [] });
-          if (typeof created?.sessionId !== "string" || !created.sessionId)
-            throw new Error("Invalid ACP session");
+          if (!Value.Check(NewSessionResultSchema, created)) throw new Error("Invalid ACP session");
           current.id = created.sessionId;
         }
         current.output = "";
@@ -194,62 +246,57 @@ export class AcpSessionPool {
     child.stdout?.on("data", (chunk: Buffer) => {
       if (s.closed) return;
       s.buffer += decoder.write(chunk);
-      if (Buffer.byteLength(s.buffer) > 1024 * 1024)
-        return s.stop(new Error("ACP frame too large"));
       let i: number;
       while ((i = s.buffer.indexOf("\n")) >= 0 && !s.closed) {
         const line = s.buffer.slice(0, i);
         s.buffer = s.buffer.slice(i + 1);
+        if (Buffer.byteLength(line) > 1024 * 1024) return s.stop(new Error("ACP frame too large"));
         if (!line.trim()) continue;
         try {
-          const frame = JSON.parse(line);
-          if (
-            frame?.jsonrpc !== "2.0" ||
-            typeof frame !== "object" ||
-            (typeof frame.method !== "string" &&
-              !(typeof frame.id === "string" || typeof frame.id === "number"))
-          ) {
-            throw new Error("Invalid ACP message");
-          }
-          if (
-            typeof frame.method === "string" &&
-            (!frame.method.length ||
-              (frame.id !== undefined &&
-                !(typeof frame.id === "string" || typeof frame.id === "number")))
-          ) {
-            throw new Error("Invalid ACP message");
-          }
+          const frame = parseMessage(line);
           s.activity?.();
-          if (typeof frame.method === "string") {
-            if (frame.id !== undefined) {
+          if (frame.kind === "method") {
+            const message = frame.message;
+            if (message.id !== undefined) {
               child.stdin?.write(
                 JSON.stringify({
                   jsonrpc: "2.0",
-                  id: frame.id,
+                  id: message.id,
                   error: { code: -32601, message: "Client operation not permitted" },
                 }) + "\n",
               );
-            } else if (frame.method === "session/update" && frame.params?.sessionId === s.id) {
-              const u = frame.params.update;
-              if (u?.sessionUpdate === "agent_message_chunk" && u.content?.type === "text") {
-                if (typeof u.content.text !== "string") throw new Error("Invalid ACP text");
-                s.output += u.content.text;
+            } else if (message.method === "session/update") {
+              if (!Value.Check(SessionUpdateSchema, message.params))
+                throw new Error("Invalid ACP session update");
+              const { sessionId, update } = message.params;
+              if (
+                sessionId === s.id &&
+                update.sessionUpdate === "agent_message_chunk" &&
+                Value.Check(ContentHeaderSchema, update.content) &&
+                update.content.type === "text"
+              ) {
+                if (!Value.Check(TextContentSchema, update.content))
+                  throw new Error("Invalid ACP text");
+                s.output += update.content.text;
                 if (Buffer.byteLength(s.output) > 256 * 1024)
                   throw new Error("ACP output too large");
               }
             }
           } else {
-            const p = s.pending.get(frame.id);
-            if (p) {
-              s.pending.delete(frame.id);
-              if (frame.error) p.reject(new Error("ACP agent returned an error"));
-              else p.resolve(frame.result);
+            const id = frame.message.id;
+            const waiter = typeof id === "number" ? s.pending.get(id) : undefined;
+            if (waiter && typeof id === "number") {
+              s.pending.delete(id);
+              if (frame.kind === "error") waiter.reject(new Error("ACP agent returned an error"));
+              else waiter.resolve(frame.message.result);
             }
           }
         } catch (e) {
           s.stop(e instanceof Error ? e : new Error("Invalid ACP JSON"));
         }
       }
+      if (!s.closed && Buffer.byteLength(s.buffer) > 1024 * 1024)
+        s.stop(new Error("ACP frame too large"));
     });
     return s;
   }

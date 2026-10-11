@@ -2,9 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { AcpAgentConfigSchema, AcpTimeoutSchema, AcpSessionPool } from "./pool.js";
 import type { AcpAgentConfig } from "./pool.js";
-import { AcpSessionPool } from "./pool.js";
 
 const CONFIG = path.join(os.homedir(), ".pi", "agent", "acp-agents.json");
 const NAME = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -15,8 +16,8 @@ function loadAgents(): Record<string, AcpAgentConfig> {
   let stat: fs.Stats;
   try {
     stat = fs.lstatSync(CONFIG);
-  } catch (error: any) {
-    if (error.code === "ENOENT") return {};
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
     throw error;
   }
   if (
@@ -27,36 +28,23 @@ function loadAgents(): Record<string, AcpAgentConfig> {
     throw new Error("ACP config must be an owner-only regular file (chmod 600)");
   if (stat.size > 65536) throw new Error("ACP config too large");
   const parsed: unknown = JSON.parse(fs.readFileSync(CONFIG, "utf8"));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-    throw new Error("Invalid ACP config");
+  const agentsSchema = Type.Record(Type.String(), Type.Unknown());
+  if (!Value.Check(agentsSchema, parsed)) throw new Error("Invalid ACP config");
   const agents: Record<string, AcpAgentConfig> = {};
   for (const [name, value] of Object.entries(parsed)) {
     if (!NAME.test(name) || !value || typeof value !== "object")
       throw new Error("Invalid ACP agent entry");
-    const entry = value as Record<string, unknown>;
-    if (
-      typeof entry.command !== "string" ||
-      !path.isAbsolute(entry.command) ||
-      !Array.isArray(entry.args) ||
-      !entry.args.every((x) => typeof x === "string")
-    )
+    if (!Value.Check(AcpAgentConfigSchema, value)) {
+      const limits = ["timeoutMs", "startupTimeoutMs", "inactivityTimeoutMs"] as const;
+      for (const key of limits) {
+        if (key in value && !Value.Check(AcpTimeoutSchema, Reflect.get(value, key)))
+          throw new Error(`Invalid ACP timeout for ${name}: ${key}`);
+      }
       throw new Error("ACP agents require an absolute executable path and string arguments");
-    const limits = ["timeoutMs", "startupTimeoutMs", "inactivityTimeoutMs"] as const;
-    for (const key of limits) {
-      const value = entry[key];
-      if (
-        value !== undefined &&
-        (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 3_600_000)
-      )
-        throw new Error(`Invalid ACP timeout for ${name}: ${key}`);
     }
-    agents[name] = {
-      command: entry.command,
-      args: entry.args as string[],
-      timeoutMs: entry.timeoutMs as number | undefined,
-      startupTimeoutMs: entry.startupTimeoutMs as number | undefined,
-      inactivityTimeoutMs: entry.inactivityTimeoutMs as number | undefined,
-    };
+    if (!path.isAbsolute(value.command))
+      throw new Error("ACP agents require an absolute executable path and string arguments");
+    agents[name] = value;
   }
   return agents;
 }
