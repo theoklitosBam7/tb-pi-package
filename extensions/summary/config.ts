@@ -61,13 +61,17 @@ export async function loadSummaryConfig(path: string): Promise<SummaryConfig> {
   return value;
 }
 
-export async function saveSummaryConfig(path: string, config: SummaryConfig): Promise<void> {
+export async function saveSummaryConfig(
+  path: string,
+  config: SummaryConfig,
+  options: { allowInvalidExisting?: boolean } = {},
+): Promise<void> {
   if (!Value.Check(SummaryConfigSchema, config)) {
     throw new Error(invalidConfigMessage(path));
   }
   await withFileMutationQueue(path, async () => {
     // Refuse to replace a config that cannot be read or validated.
-    await loadSummaryConfig(path);
+    if (!options.allowInvalidExisting) await loadSummaryConfig(path);
     const temporaryPath = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
     let ownsTemporaryFile = false;
     try {

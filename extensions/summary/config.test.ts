@@ -66,6 +66,20 @@ describe("summary config", () => {
     }
   });
 
+  test("save can replace an invalid config when explicitly allowed", async () => {
+    await writeFile(path, "{");
+    await saveSummaryConfig(
+      path,
+      { provider: "openai", model: "m", thinking: "off" },
+      { allowInvalidExisting: true },
+    );
+    expect(await loadSummaryConfig(path)).toEqual({
+      provider: "openai",
+      model: "m",
+      thinking: "off",
+    });
+  });
+
   test("read failures report the config path and an action", async () => {
     await mkdir(path);
     await expect(loadSummaryConfig(path)).rejects.toThrow(

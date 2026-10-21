@@ -64,6 +64,7 @@ async function harness(configPath?: string) {
   const session = SessionManager.inMemory();
   const notify = vi.fn();
   const select = vi.fn<SummaryContext["ui"]["select"]>().mockResolvedValue(undefined);
+  const registerEntryRenderer = vi.fn();
   const streamSimple = vi
     .fn<SummaryContext["modelRegistry"]["streamSimple"]>()
     .mockImplementation(() => {
@@ -76,7 +77,7 @@ async function harness(configPath?: string) {
     sessionManager: session,
     hasUI: true,
     modelRegistry: { find: () => model, getAvailable: () => [model], streamSimple },
-    ui: { notify, select, setStatus: vi.fn() },
+    ui: { notify, select },
   };
   let command: Parameters<SummaryHost["registerCommand"]>[1] | undefined;
   const setModel = vi.fn();
@@ -100,7 +101,7 @@ async function harness(configPath?: string) {
     appendEntry(customType, data) {
       session.appendCustomEntry(customType, data);
     },
-    registerEntryRenderer: vi.fn(),
+    registerEntryRenderer,
   };
   const path = configPath ?? join(directory, "summary.json");
   summaryExtension(host, path);
@@ -127,6 +128,7 @@ async function harness(configPath?: string) {
     streamSimple,
     notify,
     select,
+    registerEntryRenderer,
     setModel,
     setThinkingLevel,
     path,
@@ -402,6 +404,17 @@ describe("summary extension", () => {
     expect(record).not.toContain("PRIVATE_IMAGE_PAYLOAD");
   });
 
+  it("asks for a short bullet recap format", async () => {
+    const app = await harness();
+    await app.user();
+    app.assistant();
+    await app.emit({ type: "agent_settled", aborted: false });
+    await vi.waitFor(() => expect(app.streamSimple).toHaveBeenCalled());
+    const systemPrompt = app.streamSimple.mock.calls[0][1].systemPrompt;
+    expect(systemPrompt).toContain("at most three short bullet points");
+    expect(systemPrompt).toContain("changes, checks, and unfinished work");
+  });
+
   it("respects context edits when building the latest task record", async () => {
     const app = await harness();
     await app.user();
@@ -473,6 +486,74 @@ describe("summary extension", () => {
     );
   });
 
+  it("renders the recap model, thinking level, and tokens", async () => {
+    const app = await harness();
+    const renderer = app.registerEntryRenderer.mock.calls[0][1] as (entry: {
+      data: {
+        text: string;
+        provider: string;
+        model: string;
+        thinking: string;
+        usage: { totalTokens: number };
+      };
+    }) => { render(width: number): string[] };
+    const output = renderer({
+      data: {
+        text: "Changed: added an email check.",
+        provider: "openai",
+        model: "gpt-6-luna",
+        thinking: "medium",
+        usage: { totalTokens: 15 },
+      },
+    })
+      .render(80)
+      .join("\n");
+    expect(output).toContain("openai/gpt-6-luna");
+    expect(output).toContain("thinking medium");
+    expect(output).toContain("15 tokens");
+    expect(output).toContain("Changed: added an email check.");
+  });
+
+  it("prints the saved settings and path with /summary status", async () => {
+    const app = await harness();
+    await saveSummaryConfig(app.path, {
+      provider: "anthropic",
+      model: "example-model",
+      thinking: "low",
+    });
+    await app.command()?.handler(" status ", app.context);
+    expect(app.notify).toHaveBeenCalledWith(
+      expect.stringContaining("anthropic/example-model, thinking low"),
+      "info",
+    );
+    expect(app.notify).toHaveBeenCalledWith(expect.stringContaining(app.path), "info");
+    expect(app.select).not.toHaveBeenCalled();
+  });
+
+  it("resets saved settings and repairs an invalid config with /summary reset", async () => {
+    const app = await harness();
+    await writeFile(app.path, "broken JSON");
+    await app.command()?.handler("reset", app.context);
+    expect(await loadSummaryConfig(app.path)).toEqual({
+      provider: "openai",
+      model: "gpt-6-luna",
+      thinking: "medium",
+    });
+    expect(app.notify).toHaveBeenCalledWith(expect.stringContaining("reset"), "info");
+    expect(app.select).not.toHaveBeenCalled();
+  });
+
+  it("reports an invalid config for /summary status", async () => {
+    const app = await harness();
+    await writeFile(app.path, "broken JSON");
+    await app.command()?.handler("status", app.context);
+    expect(app.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Summary status failed"),
+      "error",
+    );
+    expect(app.select).not.toHaveBeenCalled();
+  });
+
   it("preserves saved settings when either configuration picker is cancelled", async () => {
     const app = await harness();
     const saved = {
@@ -522,6 +603,25 @@ describe("summary extension", () => {
       ),
     );
     expect(app.streamSimple).not.toHaveBeenCalled();
+  });
+
+  it("reports each recap failure once per session", async () => {
+    const app = await harness();
+    app.context.modelRegistry.find = () => undefined;
+    await app.user();
+    app.assistant();
+    await app.emit({ type: "agent_settled", aborted: false });
+    await vi.waitFor(() => expect(app.notify).toHaveBeenCalledTimes(1));
+    await app.user("Try the task again.");
+    app.assistant();
+    await app.emit({ type: "agent_settled", aborted: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(app.notify).toHaveBeenCalledTimes(1);
+    await app.emit({ type: "session_shutdown", reason: "new" });
+    await app.user("Start in a fresh session.");
+    app.assistant();
+    await app.emit({ type: "agent_settled", aborted: false });
+    await vi.waitFor(() => expect(app.notify).toHaveBeenCalledTimes(2));
   });
 
   it("offers only off thinking for a non-reasoning model and omits reasoning from its request", async () => {
