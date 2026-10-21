@@ -2,7 +2,12 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SessionManager, discoverAndLoadExtensions } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  discoverAndLoadExtensions,
+  initTheme,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -17,6 +22,7 @@ import summaryExtension, {
 } from "./index.js";
 
 const directories: string[] = [];
+initTheme();
 afterEach(async () => {
   await Promise.all(
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
@@ -64,6 +70,7 @@ async function harness(configPath?: string) {
   const session = SessionManager.inMemory();
   const notify = vi.fn();
   const select = vi.fn<SummaryContext["ui"]["select"]>().mockResolvedValue(undefined);
+  const setStatus = vi.fn<SummaryContext["ui"]["setStatus"]>();
   const registerEntryRenderer = vi.fn();
   const streamSimple = vi
     .fn<SummaryContext["modelRegistry"]["streamSimple"]>()
@@ -77,7 +84,7 @@ async function harness(configPath?: string) {
     sessionManager: session,
     hasUI: true,
     modelRegistry: { find: () => model, getAvailable: () => [model], streamSimple },
-    ui: { notify, select },
+    ui: { notify, select, setStatus },
   };
   let command: Parameters<SummaryHost["registerCommand"]>[1] | undefined;
   const setModel = vi.fn();
@@ -128,6 +135,7 @@ async function harness(configPath?: string) {
     streamSimple,
     notify,
     select,
+    setStatus,
     registerEntryRenderer,
     setModel,
     setThinkingLevel,
@@ -145,6 +153,12 @@ async function recapInProgress() {
   await vi.waitFor(() => expect(app.streamSimple).toHaveBeenCalled());
   return { app, stream, signal: app.streamSimple.mock.calls[0][2]?.signal };
 }
+
+const rendererTheme = {
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+} as unknown as Theme;
 
 describe("summary extension", () => {
   it("loads through Pi's real runtime and registers the summary command and renderer", async () => {
@@ -290,6 +304,44 @@ describe("summary extension", () => {
       await settling;
     }
   });
+
+  it("shows the active recap in the footer and clears it when the recap finishes", async () => {
+    const { app, stream } = await recapInProgress();
+    expect(app.setStatus).toHaveBeenCalledWith("summary", "Recap: openai/gpt-6-luna...");
+    stream.end(response());
+    await vi.waitFor(() => {
+      expect(app.setStatus).toHaveBeenLastCalledWith("summary", undefined);
+    });
+  });
+
+  it.each(["a new user message", "a new agent run", "runtime shutdown", "tree navigation"])(
+    "clears the recap progress when %s cancels it",
+    async (cancel) => {
+      const { app, stream } = await recapInProgress();
+      expect(app.setStatus).toHaveBeenLastCalledWith("summary", "Recap: openai/gpt-6-luna...");
+      switch (cancel) {
+        case "a new user message":
+          await app.user("Start a different task.");
+          break;
+        case "a new agent run":
+          await app.emit({ type: "agent_start" });
+          break;
+        case "runtime shutdown":
+          await app.emit({ type: "session_shutdown", reason: "new" });
+          break;
+        case "tree navigation":
+          await app.emit({
+            type: "session_tree",
+            oldLeafId: app.session.getLeafId(),
+            newLeafId: null,
+            fromExtension: false,
+          });
+          break;
+      }
+      expect(app.setStatus).toHaveBeenLastCalledWith("summary", undefined);
+      stream.end(response());
+    },
+  );
 
   it("aborts an obsolete recap and discards its late result when new work starts", async () => {
     const { app, stream, signal } = await recapInProgress();
@@ -486,32 +538,64 @@ describe("summary extension", () => {
     );
   });
 
-  it("renders the recap model, thinking level, and tokens", async () => {
+  it("renders the recap as labeled markdown", async () => {
     const app = await harness();
-    const renderer = app.registerEntryRenderer.mock.calls[0][1] as (entry: {
-      data: {
-        text: string;
-        provider: string;
-        model: string;
-        thinking: string;
-        usage: { totalTokens: number };
-      };
-    }) => { render(width: number): string[] };
-    const output = renderer({
-      data: {
-        text: "Changed: added an email check.",
-        provider: "openai",
-        model: "gpt-6-luna",
-        thinking: "medium",
-        usage: { totalTokens: 15 },
+    const renderer = app.registerEntryRenderer.mock.calls[0][1] as (
+      entry: {
+        data: {
+          text: string;
+          provider: string;
+          model: string;
+          thinking: string;
+          usage: { totalTokens: number };
+        };
       },
-    })
+      options: { expanded: boolean },
+      theme: Theme,
+    ) => { render(width: number): string[] };
+    const output = renderer(
+      {
+        data: {
+          text: "- **Changes:** Added an email check.\n- **Checks:** Passed.",
+          provider: "openai",
+          model: "gpt-6-luna",
+          thinking: "medium",
+          usage: { totalTokens: 15 },
+        },
+      },
+      { expanded: false },
+      rendererTheme,
+    )
       .render(80)
       .join("\n");
+    expect(output).toContain("[recap]");
     expect(output).toContain("openai/gpt-6-luna");
     expect(output).toContain("thinking medium");
     expect(output).toContain("15 tokens");
-    expect(output).toContain("Changed: added an email check.");
+    expect(output).toContain("Changes:");
+    expect(output).toContain("Added an email check.");
+    expect(output).not.toContain("**");
+    const contentLines = output
+      .split("\n")
+      .filter(
+        (line) => line.includes("[recap]") || line.includes("Changes:") || line.includes("Checks:"),
+      );
+    expect(contentLines.length).toBeGreaterThan(0);
+    expect(contentLines.every((line) => line.includes("▌"))).toBe(true);
+  });
+
+  it("renders a muted notice when recap data is missing", async () => {
+    const app = await harness();
+    const renderer = app.registerEntryRenderer.mock.calls[0][1] as (
+      entry: { data?: undefined },
+      options: { expanded: boolean },
+      theme: Theme,
+    ) => { render(width: number): string[] };
+    const output = renderer({ data: undefined }, { expanded: false }, rendererTheme)
+      .render(80)
+      .join("\n");
+    expect(output).toContain("[recap] no recap data");
+    expect(output).toContain("▌");
   });
 
   it("prints the saved settings and path with /summary status", async () => {

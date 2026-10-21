@@ -1,4 +1,4 @@
-import { buildSessionProjection } from "@earendil-works/pi-coding-agent";
+import { buildSessionProjection, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import type {
   AgentStartEvent,
   AgentSettledEvent,
@@ -9,7 +9,15 @@ import type {
   SessionTreeEvent,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import {
+  Box,
+  Container,
+  Markdown,
+  Spacer,
+  Text,
+  visibleWidth,
+  type Component,
+} from "@earendil-works/pi-tui";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import {
   DEFAULT_SUMMARY_CONFIG,
@@ -32,7 +40,7 @@ export type SummaryContext = Pick<ExtensionContext, "hasUI"> & {
     "getBranch" | "getSessionId" | "getLeafId"
   >;
   modelRegistry: Pick<ExtensionContext["modelRegistry"], "find" | "getAvailable" | "streamSimple">;
-  ui: Pick<ExtensionContext["ui"], "notify" | "select">;
+  ui: Pick<ExtensionContext["ui"], "notify" | "select" | "setStatus">;
 };
 export type SummaryHost = Pick<ExtensionAPI, "appendEntry" | "registerEntryRenderer"> & {
   on<K extends keyof SummaryEvents>(
@@ -60,6 +68,24 @@ function isTaskMessage(message: ProjectedMessage): message is TaskMessage {
 const MAX_RECORD_CHARS = 48000;
 const RECAP_TIMEOUT_MS = 60000;
 const MAX_RECAP_TOKENS = 8192;
+
+class LeftGutter implements Component {
+  constructor(
+    private readonly child: Component,
+    private readonly border: (text: string) => string,
+  ) {}
+
+  invalidate(): void {
+    this.child.invalidate?.();
+  }
+
+  render(width: number): string[] {
+    if (width < 2) return this.child.render(width);
+    const prefix = width >= 3 ? `${this.border("▌")} ` : this.border("▌");
+    const contentWidth = Math.max(1, width - visibleWidth(prefix));
+    return this.child.render(contentWidth).map((line) => `${prefix}${line}`);
+  }
+}
 
 function summaryExtension(pi: SummaryHost, path = summaryConfigPath()): void {
   pi.registerCommand("summary", {
@@ -138,10 +164,16 @@ function summaryExtension(pi: SummaryHost, path = summaryConfigPath()): void {
   });
   let taskAwaitingRecap = false;
   let active: AbortController | undefined;
+  let statusContext: SummaryContext | undefined;
   const reportedRecapErrors = new Set<string>();
+  function clearRecapStatus() {
+    statusContext?.ui.setStatus("summary", undefined);
+    statusContext = undefined;
+  }
   function cancelRecap() {
     active?.abort();
     active = undefined;
+    clearRecapStatus();
   }
   function cancel() {
     cancelRecap();
@@ -154,15 +186,36 @@ function summaryExtension(pi: SummaryHost, path = summaryConfigPath()): void {
   pi.on("session_shutdown", resetForSession);
   pi.on("session_tree", cancel);
   pi.on("agent_start", cancelRecap);
-  pi.registerEntryRenderer<SummaryEntryData>("summary", (entry) => {
+  pi.registerEntryRenderer<SummaryEntryData>("summary", (entry, _options, theme) => {
+    const panel = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+    const border = (text: string) => theme.fg("borderAccent", text);
     const data = entry.data;
-    if (!data) return new Text("Automatic recap", 1, 1);
-    const tokens = data.usage ? ` · ${data.usage.totalTokens} tokens` : "";
-    return new Text(
-      `Automatic recap — ${data.provider}/${data.model} (thinking ${data.thinking})${tokens}\n\n${data.text ?? ""}`,
-      1,
-      1,
+    if (!data) {
+      panel.addChild(
+        new LeftGutter(new Text(theme.fg("muted", "[recap] no recap data"), 0, 0), border),
+      );
+      return panel;
+    }
+    const tokens = data.usage ? `${data.usage.totalTokens.toLocaleString()} tokens` : undefined;
+    const meta = [`${data.provider}/${data.model}`, `thinking ${data.thinking}`, tokens]
+      .filter((part): part is string => part !== undefined)
+      .join(" · ");
+    const content = new Container();
+    content.addChild(
+      new Text(
+        `${theme.bold(theme.fg("customMessageLabel", "[recap]"))}${theme.fg("dim", ` ${meta}`)}`,
+        0,
+        0,
+      ),
     );
+    content.addChild(new Spacer(1));
+    content.addChild(
+      new Markdown(data.text ?? "", 0, 0, getMarkdownTheme(), {
+        color: (text) => theme.fg("customMessageText", text),
+      }),
+    );
+    panel.addChild(new LeftGutter(content, border));
+    return panel;
   });
   pi.on("message_end", (event) => {
     if (event.message.role === "user") {
@@ -242,6 +295,8 @@ function summaryExtension(pi: SummaryHost, path = summaryConfigPath()): void {
         record.length > MAX_RECORD_CHARS
           ? `${record.slice(0, half)}${truncation}${record.slice(-half)}`
           : record;
+      statusContext = ctx;
+      ctx.ui.setStatus("summary", `Recap: ${config.provider}/${config.model}...`);
       const result = await ctx.modelRegistry
         .streamSimple(
           model,
@@ -279,7 +334,10 @@ function summaryExtension(pi: SummaryHost, path = summaryConfigPath()): void {
         ctx.ui.notify(`Automatic recap failed: ${message}`, "error");
       })
       .finally(() => {
-        if (active === controller) active = undefined;
+        if (active === controller) {
+          active = undefined;
+          clearRecapStatus();
+        }
       });
   });
 }

@@ -26,11 +26,11 @@ A recap starts after Pi emits its final `agent_settled` event, not after each tu
 
 The recap asks for at most three short bullet points: changes, checks, and unfinished work from that task only. It uses user and assistant text, tool calls, and tool-result text. It respects context edits, excludes older tasks and compaction summaries, and omits hidden thinking and image payloads. It does not read additional files or execute tools. Text in the task record is sent to the selected summary provider.
 
-The request runs in the background. A new agent run, a new consumed user request, session shutdown, or tree navigation cancels an outstanding recap. Late results are discarded. Saved settings are read for each recap; changing settings does not change a request already sent. The main agent's model and thinking level remain unchanged.
+The request runs in the background. While it is in flight, the footer shows `Recap: provider/model...`. The status clears when the request finishes, fails, or is cancelled. A new agent run, a new consumed user request, session shutdown, or tree navigation cancels an outstanding recap. Late results are discarded. Saved settings are read for each recap; changing settings does not change a request already sent. The main agent's model and thinking level remain unchanged.
 
 ## Output, limits, and costs
 
-Successful recaps are stored as custom `summary` session entries. The extension registers a custom-entry renderer, so Pi displays them in the terminal transcript. The heading shows the recap model, thinking level, and token count. They do not enter model context or start another agent run. Configuration dialogs also work in RPC mode, but the recap display uses Pi's custom-entry renderer rather than an RPC notification or assistant message.
+Successful recaps are stored as custom `summary` session entries. The extension registers a custom-entry renderer, so Pi displays them in the terminal transcript as a `[recap]` panel. The heading shows the recap model, thinking level, and token count, and the recap text renders as Markdown. They do not enter model context or start another agent run. Configuration dialogs also work in RPC mode, but the recap display uses Pi's custom-entry renderer rather than an RPC notification or assistant message.
 
 Recaps make additional, potentially billable model requests. Each saved recap entry includes its model, thinking level, and returned usage. Pi 1.3.0 does not expose a native usage-entry append API to extensions, so these requests are not included in Pi's native session totals or `/session-costs`. Failed or cancelled requests can also incur provider charges, and their usage is not saved by this extension.
 
