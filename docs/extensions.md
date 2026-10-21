@@ -11,6 +11,7 @@ Each extension below ships with this package and loads automatically in pi.
 | `commands`        | —                         | `/commands`        | List all registered slash commands                                       |
 | `session-costs`   | —                         | `/session-costs`   | Show main-agent and subagent token and cost usage                        |
 | `voice-dictation` | —                         | `/dictate`         | Dictate with a local speech model and add text to the editor             |
+| `summary`         | —                         | `/summary`         | Automatically recap completed work; configure the recap model globally   |
 
 ## ask_user
 
@@ -33,6 +34,10 @@ In TUI mode, each question replaces the input area below the transcript while op
 ## list_agents
 
 `list_agents` returns the available agents with their source, tools, model, and thinking level. `/agents` shows the same list in the terminal UI, including per-agent configuration errors.
+
+## Automatic recaps and /summary
+
+The summary extension automatically recaps the latest task after Pi finishes its work. `/summary` configures the global recap model and thinking level. See [Automatic recaps](automatic-recaps.md) for configuration, task scope, output, limits, and costs.
 
 ## /commands
 
