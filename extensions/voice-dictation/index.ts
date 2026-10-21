@@ -13,6 +13,7 @@ import {
 import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { isMissingFileError } from "../lib/isMissingFileError.js";
 import { downloadModel, microphoneInputArgs, transcribeLive } from "./live.js";
 
 const execFileAsync = promisify(execFile);
@@ -33,7 +34,6 @@ export type DictationUI = Pick<
 export type DictationContext = Pick<ExtensionContext, "mode"> & { ui: DictationUI };
 
 const ObjectSchema = Type.Record(Type.String(), Type.Unknown());
-const MissingFileSchema = Type.Object({ code: Type.Literal("ENOENT") });
 const SavedModelSchema = Type.Object({ model: Type.String() });
 const CacheLocationSchema = Type.Object({ path: Type.String() });
 const SpeechVariantSchema = Type.Object({
@@ -50,7 +50,7 @@ async function readSettings(path: string): Promise<Record<string, unknown>> {
   try {
     content = await readFile(path, "utf8");
   } catch (error) {
-    if (Value.Check(MissingFileSchema, error)) return {};
+    if (isMissingFileError(error)) return {};
     throw error;
   }
   let value: unknown;

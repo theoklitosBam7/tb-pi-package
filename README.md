@@ -16,6 +16,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
 - **Commands browser** — List all registered slash commands via `/commands`.
 - **Session cost report** — View main-agent, subagent, nested, and combined token and cost totals with `/session-costs`.
+- **Automatic recaps** — Recap completed work with a separate model. Use `/summary` to save the global model and thinking level in `~/.pi/agent/summary.json` (defaults: `openai/gpt-6-luna`, thinking `medium`), `/summary status` to inspect them, or `/summary reset` to restore the defaults. These requests add provider costs.
 - **Voice dictation** — Select a Foundry Local speech model with `/dictate model`, then use `/dictate` or Control+Option+R to add speech to the editor.
 - **4 built-in agents:** Scout, researcher, implementer, and reviewer, each tuned for a specific task.
 - **Workflow prompts:** Reusable templates for scouting, research, implementation, review, implementation review, and wiki generation.
@@ -39,17 +40,18 @@ Once installed, the package's extensions, agents, prompts, and web-search skill 
 
 Detailed guides live in [`docs/`](docs/):
 
-| Document                                         | Covers                                       |
-| ------------------------------------------------ | -------------------------------------------- |
-| [Extensions](docs/extensions.md)                 | Tools and slash commands each extension adds |
-| [Web search and fetch](docs/web-search.md)       | Search, fetch, pagination, and safety limits |
-| [Subagent tool](docs/subagent-tool.md)           | Single, parallel, and chained task examples  |
-| [Agent inspector](docs/agent-inspector.md)       | Inspect running and completed agent runs     |
-| [Agent definitions](docs/agent-definitions.md)   | Agent files, built-in agents, AGENTS example |
-| [Prompts](docs/prompts.md)                       | Workflow prompt templates                    |
-| [Voice dictation](docs/voice-dictation.md)       | Foundry Local setup and `/dictate` usage     |
-| [Session costs](docs/session-costs.md)           | `/session-costs` report and token accounting |
-| [Subagent overrides](docs/subagent-overrides.md) | Per-agent `settings.json` overrides          |
+| Document                                         | Covers                                             |
+| ------------------------------------------------ | -------------------------------------------------- |
+| [Extensions](docs/extensions.md)                 | Tools and slash commands each extension adds       |
+| [Automatic recaps](docs/automatic-recaps.md)     | Global `/summary` settings, task scope, and limits |
+| [Web search and fetch](docs/web-search.md)       | Search, fetch, pagination, and safety limits       |
+| [Subagent tool](docs/subagent-tool.md)           | Single, parallel, and chained task examples        |
+| [Agent inspector](docs/agent-inspector.md)       | Inspect running and completed agent runs           |
+| [Agent definitions](docs/agent-definitions.md)   | Agent files, built-in agents, AGENTS example       |
+| [Prompts](docs/prompts.md)                       | Workflow prompt templates                          |
+| [Voice dictation](docs/voice-dictation.md)       | Foundry Local setup and `/dictate` usage           |
+| [Session costs](docs/session-costs.md)           | `/session-costs` report and token accounting       |
+| [Subagent overrides](docs/subagent-overrides.md) | Per-agent `settings.json` overrides                |
 
 ## Project Structure
 
@@ -66,6 +68,9 @@ tb-pi-package/
 │   ├── list-agents.ts   # /agents command + list_agents tool
 │   ├── session-costs/   # /session-costs slash command
 │   │   └── index.ts
+│   ├── summary/         # Automatic recaps + /summary global configuration
+│   │   ├── config.ts    # Global summary settings storage
+│   │   └── index.ts     # Recap lifecycle, /summary command, and renderer
 │   ├── voice-dictation/ # /dictate Foundry Local microphone command
 │   ├── subagent/        # Agent tool (single/parallel/chain modes)
 │   │   ├── agents.ts    # Agent discovery & parsing
