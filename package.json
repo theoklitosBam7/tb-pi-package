@@ -68,10 +68,10 @@
     "*": "oxfmt --no-error-on-unmatched-pattern",
     "*.{js,jsx,ts,tsx,mjs,cjs}": "pnpm lint"
   },
-  "packageManager": "pnpm@12.14.0",
   "engines": {
     "node": ">=22.22.3"
   },
+  "packageManager": "pnpm@12.14.0",
   "pi": {
     "extensions": [
       "./extensions"
