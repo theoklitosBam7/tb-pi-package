@@ -1,6 +1,6 @@
 # Agent inspector
 
-In pi's terminal UI, use `/agent-inspector` or press `Ctrl+Shift+A`. Select a run with the arrow keys and press Enter to see its task, model, status, live response, and tool activity. Each invocation has a separate run ID, including repeated calls to the same agent.
+In pi's terminal UI, use `/agent-inspector` or press `Ctrl+Shift+A`. Select a run with the arrow keys and press Enter to see its task, model, status, live response, and tool activity. Each invocation has a separate run ID, including repeated calls to the same agent. A watchdog timeout has the distinct `timed out` status; a manual stop has the `aborted` status. For an abort after the child starts, the detail view reports that cleanup is unknown. Read the result artifact for the deadline or cleanup status.
 
 Use Up/Down or Page Up/Page Down to scroll. Home shows the start; End follows new output. In a running run's detail view, press `x` to stop that run. The list view ignores `x`. Escape returns to the run list, then closes the inspector. Closing the view does not stop the agent.
 

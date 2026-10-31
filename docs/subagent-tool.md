@@ -10,20 +10,33 @@ The `agent` tool runs tasks in one of three modes: single, parallel, or chained.
 
 ## Parameters
 
-| Parameter              | Type    | Behavior                                                                                                                                            |
-| ---------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                | string  | Name of the agent to invoke. Mutually exclusive with `subagent_type`.                                                                               |
-| `subagent_type`        | string  | Select an agent by type, for example `planning` or `review`.                                                                                        |
-| `task`                 | string  | Task text for single mode.                                                                                                                          |
-| `model`                | string  | Model as `provider/id`, or `inherit` for the parent model. Overrides settings and frontmatter.                                                      |
-| `thinking`             | string  | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `inherit` for the parent level. Overrides settings and frontmatter.                   |
-| `tasks`                | array   | Parallel mode. Each item accepts `agent`, `subagent_type`, `task`, `cwd`, `model`, and `thinking`. Item values take priority over top-level values. |
-| `chain`                | array   | Sequential mode. Same item fields as `tasks`.                                                                                                       |
-| `agentScope`           | string  | `user`, `project`, or `both`. Default `user`.                                                                                                       |
-| `confirmProjectAgents` | boolean | Prompt before project-local agents run. Default `true`.                                                                                             |
-| `cwd`                  | string  | Working directory for single mode.                                                                                                                  |
+| Parameter              | Type    | Behavior                                                                                                                                                                     |
+| ---------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                | string  | Name of the agent to invoke. Mutually exclusive with `subagent_type`.                                                                                                        |
+| `subagent_type`        | string  | Select an agent by type, for example `planning` or `review`.                                                                                                                 |
+| `task`                 | string  | Task text for single mode.                                                                                                                                                   |
+| `model`                | string  | Model as `provider/id`, or `inherit` for the parent model. Overrides settings and frontmatter.                                                                               |
+| `thinking`             | string  | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `inherit` for the parent level. Overrides settings and frontmatter.                                            |
+| `watchdog`             | object  | Optional deadlines in seconds: `idleSeconds` (default 300), `toolSeconds` (default 600), and `taskSeconds` (default 1800). Set an individual limit to `null` to disable it.  |
+| `tasks`                | array   | Parallel mode. Each item accepts `agent`, `subagent_type`, `task`, `cwd`, `model`, `thinking`, and `watchdog`. Item watchdog fields override only matching top-level fields. |
+| `chain`                | array   | Sequential mode. Same item fields as `tasks`.                                                                                                                                |
+| `agentScope`           | string  | `user`, `project`, or `both`. Default `user`.                                                                                                                                |
+| `confirmProjectAgents` | boolean | Prompt before project-local agents run. Default `true`.                                                                                                                      |
+| `cwd`                  | string  | Working directory for single mode.                                                                                                                                           |
 
 In a chain, step N+1 receives step N's report wherever its task contains `{previous}`.
+
+## Child output limits
+
+The runner discards a stdout JSONL line longer than 1,048,576 UTF-16 code units, then resumes at the next line. It retains at most 65,536 UTF-16 code units of stderr. The result's stderr includes `[stdout line truncated]` or `[stderr truncated]` when either limit is exceeded. Watchdog timeout results omit stderr, including these markers, to avoid exposing child diagnostics.
+
+## Watchdog limits
+
+The watchdog observes child-process events. It does not poll the model. Nonempty assistant text and reasoning deltas count as progress, as do tool starts, matched tool ends, distinct tool updates, and completed messages. Defaults are 300 seconds without progress (including startup), 600 seconds for one tool call, and 1800 seconds for a complete child run, including model fallback attempts. Values must be positive integer seconds up to 2,147,483; `null` disables that deadline. Top-level values set the single-run limits and the defaults for parallel and chain items. Item values override only their own fields. The tool does not infer a watchdog limit from a child tool's arguments.
+
+A watchdog timeout is separate from a child error or a manual stop. It prevents fallback retries and produces a failed result with a timeout summary and artifact. The artifact records the deadline, limit, elapsed time, recent progress age, and cleanup status. On POSIX systems the runner starts the child in a dedicated process group. It signals that group on timeout, parent abort, or inspector stop only while the direct child is still running. If the direct child has exited, the runner does not signal the group because it cannot prove the group identity. It escalates to SIGKILL after five seconds if the direct child is still known to be running, then waits at most one more second for `close`. On other platforms it signals only the direct child. Cleanup is reported as unknown for timeouts because the runner cannot verify that every descendant has exited. For a parent abort or inspector stop after a child starts, the result records cleanup as unknown. The summary and artifact report this uncertainty. An abort before a child starts does not report cleanup status. Older results may have no cleanup record. A timeout does not undo partial file changes or external effects. Inspect the artifact, worktree, and any surviving processes before continuing; do not assume that the task failed without making changes.
+
+In parallel mode, only the timed-out child is stopped. The synchronous call still waits for its other children to finish or reach their own deadlines. A queued task's timers start when its child process starts, not while it waits for a concurrency slot.
 
 ## Model priority
 
@@ -36,8 +49,8 @@ By default the tool sees agents from `~/.pi/agent/agents`. Set `agentScope` to `
 ## Examples
 
 ```
-# Single task
-agent({ agent: "scout", task: "Map the auth module and summarize its structure", model: "inherit", thinking: "inherit" })
+# Single task; override a default deadline for a known long operation
+agent({ agent: "scout", task: "Map the auth module and summarize its structure", watchdog: { idleSeconds: 900, toolSeconds: null }, model: "inherit", thinking: "inherit" })
 
 # Parallel tasks
 agent({ tasks: [

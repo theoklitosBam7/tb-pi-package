@@ -15,7 +15,7 @@ const MAX_TOOL_ACTIVITIES = 100;
 const TRUNCATION_NOTICE = "[inspector output truncated; older content omitted]";
 const ACTIVITY_NOTICE = "[older tool activity omitted to stay within the inspector budget]";
 
-export type AgentInspectorStatus = "running" | "completed" | "failed" | "aborted";
+export type AgentInspectorStatus = "running" | "completed" | "failed" | "aborted" | "timed out";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -60,6 +60,7 @@ interface AgentInspectorRun {
   model?: string;
   thinking?: SubagentThinkingLevel;
   status: AgentInspectorStatus;
+  cleanup?: "unknown";
   text: string;
   responses: InspectorResponse[];
   tools: InspectorTool[];
@@ -76,7 +77,7 @@ export interface AgentInspectorRunHandle {
   toolUpdate(id: string, output: string): void;
   toolEnd(id: string, output: string, isError: boolean): void;
   setStopper(stopper: () => void): void;
-  finish(status: Exclude<AgentInspectorStatus, "running">): void;
+  finish(status: Exclude<AgentInspectorStatus, "running">, cleanup?: "unknown"): void;
   status(): AgentInspectorStatus;
 }
 
@@ -242,10 +243,11 @@ export class AgentInspectorStore {
         if (!isActive()) return;
         this.stoppers.set(run.id, stopper);
       },
-      finish: (status) => {
+      finish: (status, cleanup) => {
         if (!isActive()) return;
         this.stoppers.delete(run.id);
         run.status = status;
+        run.cleanup = cleanup;
         for (const tool of run.tools) {
           if (tool.status === "running") tool.status = status === "aborted" ? "aborted" : "failed";
         }
@@ -412,6 +414,7 @@ export class AgentInspectorComponent {
       case "completed":
         return "success" as const;
       case "failed":
+      case "timed out":
         return "error" as const;
       case "aborted":
         return "muted" as const;
@@ -423,6 +426,7 @@ export class AgentInspectorComponent {
       running: "⏳",
       completed: "✓",
       failed: "✗",
+      "timed out": "⌛",
       aborted: "■",
     };
     return this.theme.fg(this.statusSlot(status), icons[status]);
@@ -520,6 +524,7 @@ export class AgentInspectorComponent {
 
   private detailLines(run: AgentInspectorRun, width: number): string[] {
     const lines: string[] = [];
+    if (run.cleanup) lines.push(this.theme.fg("warning", "Cleanup: unknown"));
     if (run.model) lines.push(`${this.theme.fg("muted", "Model:")} ${run.model}`);
     lines.push(`${this.theme.fg("muted", "Thinking:")} ${getSubagentThinkingLabel(run.thinking)}`);
     lines.push(this.theme.fg("muted", "Task:"), ...run.task.split("\n"));

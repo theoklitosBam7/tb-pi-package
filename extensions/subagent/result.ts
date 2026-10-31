@@ -46,6 +46,19 @@ export interface ResultDisplayItem {
   args: Record<string, unknown>;
 }
 
+export interface WatchdogTermination {
+  kind: "watchdog";
+  deadline: "idle" | "tool" | "task";
+  limitSeconds: number;
+  elapsedSeconds: number;
+  activeTool?: string;
+  toolElapsedSeconds?: number;
+  lastProgressAgeSeconds: number;
+  cleanup: "unknown";
+}
+
+export type SubagentTermination = WatchdogTermination | { kind: "abort"; cleanup: "unknown" };
+
 interface SingleResultData {
   agent: string;
   agentSource: "user" | "project" | "unknown";
@@ -60,6 +73,7 @@ interface SingleResultData {
   systemPromptOverridden?: boolean;
   stopReason?: string;
   errorMessage?: string;
+  termination?: SubagentTermination;
   step?: number;
   outputPath?: string;
   displayItems?: ResultDisplayItem[];
@@ -91,8 +105,9 @@ export function buildArtifactPath(options: {
 }
 
 function getResultSummaryStatus(
-  result: Pick<SingleResult, "exitCode" | "stopReason">,
-): "completed" | "failed" | "aborted" {
+  result: Pick<SingleResult, "exitCode" | "stopReason" | "termination">,
+): "completed" | "failed" | "aborted" | "timed out" {
+  if (result.termination?.kind === "watchdog") return "timed out";
   if (result.stopReason === "aborted") return "aborted";
   return getResultStatus(result) === "completed" ? "completed" : "failed";
 }
@@ -114,11 +129,12 @@ function formatResultThinking(result: SingleResult): string {
 
 function formatArtifactMarkdown(options: {
   agent: string;
-  status: "completed" | "failed" | "aborted";
+  status: "completed" | "failed" | "aborted" | "timed out";
   model?: string;
   thinkingLabel: string;
   exitCode: number;
   stopReason?: string;
+  termination?: SubagentTermination;
   taskLabel: string;
   startedAt: string;
   finishedAt: string;
@@ -135,6 +151,13 @@ function formatArtifactMarkdown(options: {
     `- Thinking: ${options.thinkingLabel}`,
     `- Exit code: ${options.exitCode}`,
     ...(options.stopReason ? [`- Stop reason: ${options.stopReason}`] : []),
+    ...(options.termination?.kind === "watchdog"
+      ? [
+          `- Watchdog: ${options.termination.deadline} deadline (${options.termination.limitSeconds}s); cleanup ${options.termination.cleanup}`,
+        ]
+      : options.termination?.kind === "abort"
+        ? ["- Cleanup: unknown"]
+        : []),
     `- Task: ${options.taskLabel}`,
     `- Started: ${options.startedAt}`,
     `- Finished: ${options.finishedAt}`,
@@ -192,23 +215,28 @@ export interface ParallelSummaryItem {
   outputPath: string;
   exitCode: number;
   stopReason?: string;
+  termination?: SubagentTermination;
+}
+
+function cleanupSummary(termination?: SubagentTermination): string {
+  return termination?.kind === "abort" ? " Cleanup: unknown." : "";
 }
 
 export function formatSingleSummary(
-  result: Pick<SingleResult, "exitCode" | "stopReason">,
+  result: Pick<SingleResult, "exitCode" | "stopReason" | "termination">,
   outputPath: string,
 ): string {
-  return `Agent ${getResultSummaryStatus(result)}. Read this file before continuing: ${outputPath}`;
+  return `Agent ${getResultSummaryStatus(result)}.${cleanupSummary(result.termination)} Read this file before continuing: ${outputPath}`;
 }
 
 export function formatChainSummary(
-  results: Array<Pick<SingleResult, "outputPath" | "exitCode" | "stopReason">>,
+  results: Array<Pick<SingleResult, "outputPath" | "exitCode" | "stopReason" | "termination">>,
 ): string {
   return results
     .map((result, index) => {
       const status = getResultSummaryStatus(result);
       const marker = index === results.length - 1 ? " (final)" : "";
-      return `Step ${index + 1} ${status}${marker}. Read this file before continuing: ${result.outputPath}`;
+      return `Step ${index + 1} ${status}${marker}.${cleanupSummary(result.termination)} Read this file before continuing: ${result.outputPath}`;
     })
     .join("\n");
 }
@@ -217,7 +245,7 @@ export function formatParallelSummary(results: ParallelSummaryItem[]): string {
   const successCount = results.filter((result) => getResultStatus(result) === "completed").length;
   const lines = results.map((result) => {
     const status = getResultSummaryStatus(result);
-    return `[${result.agent}] ${status}. Read this file before continuing: ${result.outputPath}`;
+    return `[${result.agent}] ${status}.${cleanupSummary(result.termination)} Read this file before continuing: ${result.outputPath}`;
   });
   return `Parallel: ${successCount}/${results.length} succeeded\n\n${lines.join("\n")}`;
 }
@@ -234,10 +262,15 @@ export function getResultOutput(result: Pick<SingleResult, "messages" | "outputP
 }
 
 export function getResultStatus(
-  result: Pick<SingleResult, "exitCode" | "stopReason">,
+  result: Pick<SingleResult, "exitCode" | "stopReason" | "termination">,
 ): "running" | "completed" | "failed" {
   if (result.exitCode === -1) return "running";
-  if (result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted") {
+  if (
+    result.exitCode !== 0 ||
+    result.stopReason === "error" ||
+    result.stopReason === "aborted" ||
+    result.termination?.kind === "watchdog"
+  ) {
     return "failed";
   }
   return "completed";
@@ -275,6 +308,7 @@ export async function writeResultArtifact(options: {
     thinkingLabel: formatResultThinking(result),
     exitCode: result.exitCode,
     stopReason: result.stopReason,
+    termination: result.termination,
     taskLabel: options.taskLabel,
     startedAt: options.startedAt,
     finishedAt: new Date().toISOString(),

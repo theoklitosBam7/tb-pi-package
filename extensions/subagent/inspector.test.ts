@@ -277,6 +277,8 @@ describe("subagent inspector live bridge", () => {
     const result = await execution;
 
     expect(result.details.results[1].stopReason).toBe("aborted");
+    expect(result.details.results[1].termination).toEqual({ kind: "abort", cleanup: "unknown" });
+    expect(fixture.output()).toContain("Cleanup: unknown");
     expect(fixture.output()).toContain("run-2 · worker · ■ aborted");
     expect(fixture.output()).toContain("tool · bash · ■ aborted");
     fixture.views[0].handleInput("\x1b");
@@ -286,6 +288,75 @@ describe("subagent inspector live bridge", () => {
     fixture.views[0].handleInput("\x1b");
     await open;
   });
+
+  it.runIf(process.platform !== "win32")(
+    "signals the dedicated group on inspector stop",
+    async () => {
+      const fixture = executionFixture();
+      const processKill = vi.spyOn(process, "kill").mockImplementation(() => {
+        queueMicrotask(() => fixture.children[0].emit("close", null, "SIGTERM"));
+        return true;
+      });
+      try {
+        const execution = fixture.execute({ agent: "worker", task: "Review" });
+        await vi.waitFor(() => expect(fixture.children).toHaveLength(1));
+        Object.assign(fixture.children[0], { pid: 45_678 });
+        const open = fixture.commands["agent-inspector"].handler("", fixture.ctx);
+        fixture.views[0].handleInput("\r");
+        fixture.views[0].handleInput("x");
+        const result = await execution;
+        expect(processKill).toHaveBeenCalledWith(-45_678, "SIGTERM");
+        expect(result.details.results[0].stopReason).toBe("aborted");
+        fixture.views[0].handleInput("\x1b");
+        fixture.views[0].handleInput("\x1b");
+        await open;
+      } finally {
+        processKill.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "stops a real child and descendant from the inspector",
+    async () => {
+      const fixture = executionFixture();
+      const { spawn: realSpawn } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const fixturePath = path.join(fixture.project, "fixture.cjs");
+      const readyPath = path.join(fixture.project, "ready");
+      const signalPath = path.join(fixture.project, "signal");
+      fs.writeFileSync(
+        fixturePath,
+        `const { spawn } = require("node:child_process");\n` +
+          `spawn(process.execPath, ["-e", ${JSON.stringify(`const fs = require("node:fs"); process.on("SIGTERM", () => { fs.writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM"); process.exit(0); }); fs.writeFileSync(${JSON.stringify(readyPath)}, "ready"); setTimeout(() => process.exit(0), 8000);`)}], { stdio: "ignore" });\n` +
+          `process.on("SIGTERM", () => {});\n` +
+          `setTimeout(() => process.exit(0), 8000);\n`,
+      );
+      let leader: ReturnType<typeof realSpawn> | undefined;
+      vi.mocked(spawn).mockImplementation((_command, _args, options) => {
+        leader = realSpawn(process.execPath, [fixturePath], options);
+        return leader as never;
+      });
+      try {
+        const execution = fixture.execute({ agent: "worker", task: "Review" });
+        await vi.waitFor(() => expect(fs.existsSync(readyPath)).toBe(true));
+        const open = fixture.commands["agent-inspector"].handler("", fixture.ctx);
+        fixture.views[0].handleInput("\r");
+        fixture.views[0].handleInput("x");
+        const result = await execution;
+        expect(result.details.results[0].stopReason).toBe("aborted");
+        expect(fixture.output()).toContain("aborted");
+        await vi.waitFor(() => expect(fs.readFileSync(signalPath, "utf8")).toBe("SIGTERM"));
+        fixture.views[0].handleInput("\x1b");
+        fixture.views[0].handleInput("\x1b");
+        await open;
+      } finally {
+        if (leader && leader.exitCode === null && leader.signalCode === null)
+          leader.kill("SIGKILL");
+      }
+    },
+    10_000,
+  );
 
   it("does not spawn a fallback after a stop between attempts", async () => {
     const fixture = executionFixture();
@@ -445,8 +516,20 @@ describe("subagent inspector live bridge", () => {
 
     const startMessage = {
       role: "assistant",
-      content: [{ type: "text", text: "" }],
-      model: "provider/fixture",
+      content: [],
+      api: "fixture-api",
+      provider: "provider",
+      model: "fixture",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "pending",
+      timestamp: 1,
     };
     process.stdout.emit(
       "data",
@@ -481,7 +564,14 @@ describe("subagent inspector live bridge", () => {
 
     process.stdout.emit(
       "data",
-      `${JSON.stringify({ type: "message_end", message: { ...startMessage, content: [{ type: "text", text: "live answer" }] } })}\n`,
+      `${JSON.stringify({
+        type: "message_end",
+        message: {
+          ...startMessage,
+          content: [{ type: "text", text: "live answer" }],
+          stopReason: "stop",
+        },
+      })}\n`,
     );
     process.stdout.emit(
       "data",
@@ -492,13 +582,19 @@ describe("subagent inspector live bridge", () => {
     expect(finalizedDetail).not.toContain("file contents");
     expect(finalizedDetail.match(/live answer/g)).toHaveLength(1);
 
+    const secondTurnStart = { ...startMessage, timestamp: 2 };
+    process.stdout.emit(
+      "data",
+      `${JSON.stringify({ type: "message_start", message: secondTurnStart })}\n`,
+    );
     process.stdout.emit(
       "data",
       `${JSON.stringify({
         type: "message_end",
         message: {
-          ...startMessage,
+          ...secondTurnStart,
           content: [{ type: "text", text: "Second turn without deltas" }],
+          stopReason: "stop",
         },
       })}\n`,
     );
