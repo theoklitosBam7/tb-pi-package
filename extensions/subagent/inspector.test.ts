@@ -317,7 +317,7 @@ describe("subagent inspector live bridge", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "stops a real child and descendant from the inspector",
+    "[process integration] stops a real child and descendant from the inspector",
     async () => {
       const fixture = executionFixture();
       const { spawn: realSpawn } =

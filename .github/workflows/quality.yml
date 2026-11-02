@@ -50,3 +50,6 @@ jobs:
 
       - name: Run tests
         run: pnpm test
+
+      - name: Run process integration tests
+        run: pnpm test:integration

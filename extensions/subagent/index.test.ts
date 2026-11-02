@@ -1713,7 +1713,7 @@ describe("subagent watchdog", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "bounds cleanup and stops a real child process group on timeout",
+    "[process integration] bounds cleanup and stops a real child process group on timeout",
     async () => {
       const project = createPersistenceTestProject(
         "watchdog-process-group-",
@@ -1780,7 +1780,7 @@ describe("subagent watchdog", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "escalates to kill a real descendant that ignores SIGTERM",
+    "[process integration] escalates to kill a real descendant that ignores SIGTERM",
     async () => {
       const project = createPersistenceTestProject(
         "watchdog-group-escalation-",
@@ -1848,6 +1848,7 @@ setTimeout(() => process.exit(0), 12000);`,
   );
 
   it("does not signal a process group after its leader exits and keeps cleanup unknown", async () => {
+    vi.useFakeTimers();
     const project = createPersistenceTestProject(
       "watchdog-exited-leader-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -1859,7 +1860,7 @@ setTimeout(() => process.exit(0), 12000);`,
     const exitTimer = setTimeout(() => child.emit("exit", 0, null), 100);
 
     try {
-      const result = await tools.agent.execute(
+      const execution = tools.agent.execute(
         "call-watchdog-exited-leader",
         {
           agent: "worker",
@@ -1877,6 +1878,10 @@ setTimeout(() => process.exit(0), 12000);`,
         },
       );
 
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(7_000);
+      const result = await execution;
+
       expect(result.details.results[0].termination).toMatchObject({
         kind: "watchdog",
         deadline: "idle",
@@ -1885,6 +1890,7 @@ setTimeout(() => process.exit(0), 12000);`,
       expect(processKill).not.toHaveBeenCalled();
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
+      vi.useRealTimers();
       clearTimeout(exitTimer);
       processKill.mockRestore();
       vi.mocked(spawn).mockReset();
@@ -2056,7 +2062,7 @@ setTimeout(() => process.exit(0), 12000);`,
   );
 
   it.runIf(process.platform !== "win32")(
-    "stops a real child and descendant when the parent aborts",
+    "[process integration] stops a real child and descendant when the parent aborts",
     async () => {
       const project = createPersistenceTestProject(
         "abort-real-group-",
@@ -2109,6 +2115,7 @@ setTimeout(() => process.exit(0), 12000);`,
   );
 
   it("returns an aborted result when the parent aborts before the watchdog deadline and the child stays open", async () => {
+    vi.useFakeTimers();
     const project = createPersistenceTestProject(
       "watchdog-abort-race-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -2121,7 +2128,7 @@ setTimeout(() => process.exit(0), 12000);`,
 
     try {
       const startedAt = Date.now();
-      const result = await tools.agent.execute(
+      const execution = tools.agent.execute(
         "call-watchdog-abort-race",
         {
           agent: "worker",
@@ -2139,10 +2146,15 @@ setTimeout(() => process.exit(0), 12000);`,
         },
       );
 
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(6_100);
+      const result = await execution;
+
       expect(Date.now() - startedAt).toBeLessThan(8_000);
       expect(result.details.results[0].stopReason).toBe("aborted");
       expect(result.details.results[0].termination).toEqual({ kind: "abort", cleanup: "unknown" });
     } finally {
+      vi.useRealTimers();
       clearTimeout(abortTimer);
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
@@ -2153,6 +2165,7 @@ setTimeout(() => process.exit(0), 12000);`,
   it.runIf(process.platform !== "win32")(
     "keeps the timeout result and bounds cleanup when signals fail and abort arrives later",
     async () => {
+      vi.useFakeTimers();
       const project = createPersistenceTestProject(
         "watchdog-signal-failure-",
         "---\nname: worker\ndescription: Test worker\n---\n",
@@ -2170,7 +2183,7 @@ setTimeout(() => process.exit(0), 12000);`,
       const tools = registerPersistenceTestTools();
       const startedAt = Date.now();
       try {
-        const result = await tools.agent.execute(
+        const execution = tools.agent.execute(
           "call-watchdog-signal-failure",
           {
             agent: "worker",
@@ -2187,6 +2200,10 @@ setTimeout(() => process.exit(0), 12000);`,
             sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
           },
         );
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(7_000);
+        const result = await execution;
+
         expect(Date.now() - startedAt).toBeLessThan(8_000);
         expect(result.details.results[0].termination).toMatchObject({
           kind: "watchdog",
@@ -2198,6 +2215,7 @@ setTimeout(() => process.exit(0), 12000);`,
         expect(child.kill).toHaveBeenCalledWith("SIGTERM");
         expect(child.kill).toHaveBeenCalledWith("SIGKILL");
       } finally {
+        vi.useRealTimers();
         clearTimeout(abortTimer);
         processKill.mockRestore();
         vi.mocked(spawn).mockReset();
@@ -2209,6 +2227,7 @@ setTimeout(() => process.exit(0), 12000);`,
   );
 
   it("enforces the tool deadline while assistant text continues to stream", async () => {
+    vi.useFakeTimers();
     const project = createPersistenceTestProject(
       "watchdog-tool-deadline-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -2258,6 +2277,9 @@ setTimeout(() => process.exit(0), 12000);`,
           sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
         },
       );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_100);
+      await vi.advanceTimersByTimeAsync(6_000);
       const result = await resultPromise;
 
       expect(result.details.results[0].termination).toMatchObject({
@@ -2267,6 +2289,7 @@ setTimeout(() => process.exit(0), 12000);`,
       });
     } finally {
       for (const timer of eventTimers) clearTimeout(timer);
+      vi.useRealTimers();
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
       fs.rmSync(project, { recursive: true, force: true });
@@ -2274,6 +2297,7 @@ setTimeout(() => process.exit(0), 12000);`,
   }, 5_000);
 
   it("enforces the task deadline while assistant text continues to stream", async () => {
+    vi.useFakeTimers();
     const project = createPersistenceTestProject(
       "watchdog-task-deadline-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -2298,7 +2322,7 @@ setTimeout(() => process.exit(0), 12000);`,
     );
 
     try {
-      const result = await tools.agent.execute(
+      const execution = tools.agent.execute(
         "call-watchdog-task-deadline",
         {
           agent: "worker",
@@ -2315,6 +2339,10 @@ setTimeout(() => process.exit(0), 12000);`,
           sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
         },
       );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const result = await execution;
 
       expect(result.details.results[0].termination).toMatchObject({
         kind: "watchdog",
@@ -2322,6 +2350,7 @@ setTimeout(() => process.exit(0), 12000);`,
       });
     } finally {
       clearInterval(progressTimer);
+      vi.useRealTimers();
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
       fs.rmSync(project, { recursive: true, force: true });
@@ -2331,6 +2360,7 @@ setTimeout(() => process.exit(0), 12000);`,
   it.each(["parallel", "chain"] as const)(
     "applies an item watchdog override in %s mode",
     async (mode) => {
+      vi.useFakeTimers();
       const project = createPersistenceTestProject(
         `watchdog-item-override-${mode}-`,
         "---\nname: worker\ndescription: Test worker\n---\n",
@@ -2355,7 +2385,7 @@ setTimeout(() => process.exit(0), 12000);`,
       );
 
       try {
-        const result = await tools.agent.execute(
+        const execution = tools.agent.execute(
           `call-watchdog-item-override-${mode}`,
           {
             [mode === "parallel" ? "tasks" : "chain"]: [
@@ -2374,12 +2404,17 @@ setTimeout(() => process.exit(0), 12000);`,
           },
         );
 
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(6_000);
+        const result = await execution;
         expect(result.details.results[0].termination).toMatchObject({
           kind: "watchdog",
           deadline: "task",
         });
       } finally {
         clearInterval(progressTimer);
+        vi.useRealTimers();
         vi.mocked(spawn).mockReset();
         vi.unstubAllEnvs();
         fs.rmSync(project, { recursive: true, force: true });
@@ -2505,6 +2540,7 @@ setTimeout(() => process.exit(0), 12000);`,
   }, 5_000);
 
   it("keeps the first timeout and bounded cleanup when tool events arrive during cleanup", async () => {
+    vi.useFakeTimers();
     const project = createPersistenceTestProject(
       "watchdog-cleanup-events-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -2530,7 +2566,7 @@ setTimeout(() => process.exit(0), 12000);`,
 
     try {
       const startedAt = Date.now();
-      const result = await tools.agent.execute(
+      const execution = tools.agent.execute(
         "call-watchdog-cleanup-events",
         {
           agent: "worker",
@@ -2547,6 +2583,10 @@ setTimeout(() => process.exit(0), 12000);`,
           sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
         },
       );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(7_100);
+      const result = await execution;
 
       expect(result.details.results[0].termination).toMatchObject({
         kind: "watchdog",
@@ -2568,6 +2608,7 @@ setTimeout(() => process.exit(0), 12000);`,
     } finally {
       clearTimeout(toolStart);
       clearTimeout(cleanupEvents);
+      vi.useRealTimers();
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
       fs.rmSync(project, { recursive: true, force: true });
@@ -3683,6 +3724,7 @@ describe("completed message events", () => {
       { role: "compactionSummary", summary: "Earlier context", tokensBefore: 100, timestamp: 1 },
     ],
   ])("accepts %s from a registered agent as progress", async (_name, message) => {
+    vi.useFakeTimers();
     const project = createPersistenceTestProject(
       "watchdog-message-variant-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -3700,7 +3742,7 @@ describe("completed message events", () => {
     const closeChild = setTimeout(() => child.emit("close", 0, null), 1_250);
 
     try {
-      const result = await tools.agent.execute(
+      const execution = tools.agent.execute(
         "call-watchdog-message-variant",
         {
           agent: "worker",
@@ -3718,9 +3760,14 @@ describe("completed message events", () => {
         },
       );
 
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_250);
+      const result = await execution;
+
       expect(result.details.results[0].termination).toBeUndefined();
       expect(result.details.results[0].exitCode).toBe(0);
     } finally {
+      vi.useRealTimers();
       clearTimeout(emitMessage);
       clearTimeout(closeChild);
       vi.mocked(spawn).mockReset();
@@ -3730,6 +3777,7 @@ describe("completed message events", () => {
   });
 
   it("does not reset the idle deadline for malformed or unstarted message completions", async () => {
+    vi.useFakeTimers();
     const project = createPersistenceTestProject(
       "watchdog-malformed-message-end-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -3781,7 +3829,7 @@ describe("completed message events", () => {
 
     try {
       const startedAt = Date.now();
-      const result = await tools.agent.execute(
+      const execution = tools.agent.execute(
         "call-watchdog-malformed-message-end",
         {
           agent: "worker",
@@ -3799,6 +3847,10 @@ describe("completed message events", () => {
         },
       );
 
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await execution;
+
       expect(result.details.results[0].termination).toMatchObject({
         kind: "watchdog",
         deadline: "idle",
@@ -3806,6 +3858,7 @@ describe("completed message events", () => {
       });
       expect(Date.now() - startedAt).toBeLessThan(1_500);
     } finally {
+      vi.useRealTimers();
       clearTimeout(invalidCompletions);
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
