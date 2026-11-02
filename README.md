@@ -114,7 +114,7 @@ pnpm test
 pnpm test:integration
 ```
 
-`pnpm test` runs the default suite, including the existing web integration tests.
+`pnpm test` runs the unit test suite.
 `pnpm test:integration` runs the marked HTTPS transport test and the subagent tests that start real child processes. The process tests use the `[process integration]` marker and require a non-Windows system.
 
 ## Contributing
