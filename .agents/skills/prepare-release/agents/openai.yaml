@@ -1,0 +1,7 @@
+interface:
+  display_name: "Prepare Release"
+  short_description: "Prepare a release pull request"
+  default_prompt: "Use $prepare-release to prepare a release branch and pull request."
+
+policy:
+  allow_implicit_invocation: true
