@@ -291,6 +291,8 @@ describe("writeResultArtifact", () => {
       const artifact = fs.readFileSync(outputPath, "utf8");
       expect(artifact).toContain("- Status: completed");
       expect(artifact).toContain("- Model: anthropic/claude-sonnet-4-5");
+      expect(artifact).not.toContain("Observed dispatch:");
+      expect(artifact).not.toContain("Provider-reported response model:");
       expect(artifact).toContain("- Thinking: medium");
       expect(artifact).toContain("- Task: parallel item 2");
       expect(artifact).toContain("## Result\n\n# Finding\n\nComplete output.");
@@ -722,6 +724,619 @@ function registerPersistenceTestTools(
 }
 
 describe("subagent output limits", () => {
+  it("records a provider-reported identity on an error without labeling it as generated output", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-error-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      queueMicrotask(() => {
+        emitPersistenceTestMessage(child, {
+          role: "assistant",
+          content: [],
+          api: "test",
+          provider: "provider",
+          model: "dispatch",
+          responseModel: "reported",
+          stopReason: "error",
+          timestamp: 1,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { total: 0 },
+          },
+        });
+        child.emit("close", 1, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "error",
+        {
+          agent: "worker",
+          task: "test",
+          model: "test/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.details.results[0].modelProvenance.response).toEqual(["reported"]);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("retains changed dispatch identities within a message", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-change-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      queueMicrotask(() => {
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "test",
+          provider: "provider",
+          model: "first",
+          stopReason: "pending",
+          timestamp: 1,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { total: 0 },
+          },
+        };
+        child.stdout.emit("data", `${JSON.stringify({ type: "message_start", message })}\n`);
+        child.stdout.emit(
+          "data",
+          `${JSON.stringify({ type: "message_end", message: { ...message, model: "second", stopReason: "stop" } })}\n`,
+        );
+        child.emit("close", 0, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "changed",
+        {
+          agent: "worker",
+          task: "test",
+          model: "test/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.details.results[0].modelProvenance.dispatch).toEqual([
+        "provider/first",
+        "provider/second",
+      ]);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("retains dispatch identities and attempted selections across retries", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-retry-",
+      "---\nname: worker\ndescription: Test worker\nmodel: fallback/model\n---\n",
+    );
+    let attempt = 0;
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      const current = ++attempt;
+      queueMicrotask(() => {
+        emitPersistenceTestMessage(child, {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "test",
+          provider: "provider",
+          model: current === 1 ? "first" : "second",
+          stopReason: current === 1 ? "error" : "stop",
+          timestamp: current,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { total: 0 },
+          },
+        });
+        if (current === 1) child.stderr.emit("data", "No API key");
+        child.emit("close", current === 1 ? 1 : 0, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "retry",
+        {
+          agent: "worker",
+          task: "test",
+          model: "requested/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.details.results[0].modelProvenance).toEqual({
+        requested: "requested/model",
+        resolved: ["requested/model", "fallback/model"],
+        attempted: ["requested/model", "fallback/model"],
+        dispatch: ["provider/first", "provider/second"],
+        response: [],
+      });
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["timeout", "abort"] as const)(
+    "retains provenance in the %s artifact",
+    async (reason) => {
+      const project = createPersistenceTestProject(
+        "stopped-provenance-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const child = createPersistenceTestChild();
+      child.kill.mockImplementation(() => {
+        queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+        return true;
+      });
+      vi.mocked(spawn).mockImplementation(() => {
+        queueMicrotask(() =>
+          emitPersistenceTestMessage(child, {
+            role: "assistant",
+            content: [{ type: "text", text: "working" }],
+            api: "test",
+            provider: "actual",
+            model: "dispatch",
+            responseModel: "version",
+            stopReason: "stop",
+            timestamp: 1,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { total: 0 },
+            },
+          }),
+        );
+        return child as never;
+      });
+      const controller = new AbortController();
+      const timer = reason === "abort" ? setTimeout(() => controller.abort(), 100) : undefined;
+      try {
+        const result = await registerPersistenceTestTools().agent.execute(
+          "stopped-provenance",
+          {
+            agent: "worker",
+            task: "test",
+            model: "requested/model",
+            modelFallback: "none",
+            agentScope: "project",
+            confirmProjectAgents: false,
+            watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+          },
+          controller.signal,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        const item = result.details.results[0];
+        expect(item.modelProvenance).toMatchObject({
+          attempted: ["requested/model"],
+          dispatch: ["actual/dispatch"],
+          response: ["version"],
+        });
+        const artifact = fs.readFileSync(item.outputPath, "utf8");
+        expect(artifact).toContain("Observed dispatch: actual/dispatch");
+        expect(artifact).toContain("Provider-reported response model: version");
+        expect(item.termination.kind).toBe(reason === "timeout" ? "watchdog" : "abort");
+      } finally {
+        if (timer) clearTimeout(timer);
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("reports unknown dispatch when a child fails before emitting model events", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-startup-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      queueMicrotask(() => {
+        child.stderr.emit("data", "startup failed");
+        child.emit("close", 1, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "startup",
+        {
+          agent: "worker",
+          task: "test",
+          model: "test/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      const item = result.details.results[0];
+      expect(item.modelProvenance).toEqual({
+        requested: "test/model",
+        resolved: ["test/model"],
+        attempted: ["test/model"],
+        dispatch: [],
+        response: [],
+      });
+      const artifact = fs.readFileSync(item.outputPath, "utf8");
+      expect(artifact).toContain("Observed dispatch: unknown");
+      expect(artifact).toContain("Provider-reported response model: unknown");
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("persists requested, attempted, dispatch and provider response model evidence separately", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      queueMicrotask(() => {
+        emitPersistenceTestMessage(child, {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "test",
+          provider: "actual",
+          model: "dispatch",
+          responseModel: "provider-version",
+          stopReason: "stop",
+          timestamp: 1,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { total: 0 },
+          },
+        });
+        child.emit("close", 0, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "provenance",
+        {
+          agent: "worker",
+          task: "test",
+          model: "requested/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      const item = result.details.results[0];
+      expect(item.modelProvenance).toEqual({
+        requested: "requested/model",
+        resolved: ["requested/model"],
+        attempted: ["requested/model"],
+        dispatch: ["actual/dispatch"],
+        response: ["provider-version"],
+      });
+      const artifact = fs.readFileSync(item.outputPath, "utf8");
+      expect(artifact).toContain("Observed dispatch: actual/dispatch");
+      expect(artifact).toContain("Provider-reported response model: provider-version");
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+  it.each(["tasks", "chain"] as const)(
+    "allows a %s item to override strict policy and thinking",
+    async (mode) => {
+      const project = createPersistenceTestProject(
+        "item-policy-",
+        "---\nname: worker\ndescription: Test worker\nmodel: fallback/model\nthinking: high\n---\n",
+      );
+      let attempts = 0;
+      vi.mocked(spawn).mockImplementation(() => {
+        const child = createPersistenceTestChild();
+        const current = ++attempts;
+        queueMicrotask(() => {
+          if (current === 1) child.stderr.emit("data", "No API key");
+          child.emit("close", current === 1 ? 1 : 0, null);
+        });
+        return child as never;
+      });
+      try {
+        const result = await registerPersistenceTestTools("xhigh").agent.execute(
+          "item-policy",
+          {
+            [mode]: [
+              { agent: "worker", task: "test", modelFallback: "configured", thinking: "inherit" },
+            ],
+            model: "primary/model",
+            modelFallback: "none",
+            thinking: "off",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            model: { provider: "parent", id: "model" },
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        expect(result.details.results[0]).toMatchObject({
+          thinking: "xhigh",
+          modelProvenance: { attempted: ["primary/model", "fallback/model"] },
+        });
+      } finally {
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["tasks", "chain"] as const)(
+    "preflights a %s item with no concrete model",
+    async (mode) => {
+      const project = createPersistenceTestProject(
+        "strict-no-model-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      try {
+        const result = await registerPersistenceTestTools().agent.execute(
+          "no-model",
+          {
+            [mode]: [
+              { agent: "worker", task: "first", model: "valid/model" },
+              { agent: "worker", task: "second" },
+            ],
+            modelFallback: "none",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        expect(result.isError).toBe(true);
+        expect(spawn).not.toHaveBeenCalled();
+      } finally {
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["tasks", "chain"] as const)(
+    "preflights all strict %s items before spawning",
+    async (mode) => {
+      const project = createPersistenceTestProject(
+        "strict-batch-preflight-",
+        "---\nname: worker\ndescription: Test worker\nmodel: fallback/model\n---\n",
+      );
+      try {
+        const result = await registerPersistenceTestTools().agent.execute(
+          "strict-batch-preflight",
+          {
+            [mode]: [
+              { agent: "worker", task: "first", model: "valid/model" },
+              { agent: "worker", task: "second", model: "inherit" },
+            ],
+            modelFallback: "none",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        expect(result.isError).toBe(true);
+        expect(spawn).not.toHaveBeenCalled();
+      } finally {
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects strict inherit without a parent model before spawning", async () => {
+    const project = createPersistenceTestProject(
+      "strict-inherit-missing-",
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "strict-inherit-missing",
+        {
+          agent: "worker",
+          task: "test",
+          model: "inherit",
+          modelFallback: "none",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("applies the top-level strict fallback policy to parallel tasks", async () => {
+    const project = createPersistenceTestProject(
+      "parallel-strict-",
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    let attempts = 0;
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      attempts++;
+      queueMicrotask(() => {
+        child.stderr.emit("data", "No API key");
+        child.emit("close", 1, null);
+      });
+      return child as never;
+    });
+    try {
+      await registerPersistenceTestTools().agent.execute(
+        "parallel-strict",
+        {
+          tasks: [{ agent: "worker", task: "test", model: "test/primary" }],
+          modelFallback: "none",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(attempts).toBe(1);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry a model error when model fallback is none", async () => {
+    const project = createPersistenceTestProject(
+      "strict-fallback-",
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    let attempts = 0;
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      attempts++;
+      queueMicrotask(() => {
+        child.stderr.emit("data", "No API key");
+        child.emit("close", 1, null);
+      });
+      return child as never;
+    });
+    try {
+      await registerPersistenceTestTools().agent.execute(
+        "strict-fallback",
+        {
+          agent: "worker",
+          task: "test",
+          model: "test/primary",
+          modelFallback: "none",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(attempts).toBe(1);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { chunks: ["No API key"], attempts: 2 },
     { chunks: ["No AP", "I key"], attempts: 2 },
@@ -1277,6 +1892,36 @@ setTimeout(() => process.exit(0), 12000);`,
       fs.rmSync(project, { recursive: true, force: true });
     }
   }, 8_000);
+
+  it.each([
+    { modelFallback: "invalid", tasks: [{ agent: "worker", task: "test" }] },
+    { tasks: [{ agent: "worker", task: "test", modelFallback: "invalid" }] },
+    { chain: [{ agent: "worker", task: "test", modelFallback: "invalid" }] },
+  ])("rejects invalid fallback policies before spawning: %j", async (input) => {
+    const project = createPersistenceTestProject(
+      "invalid-fallback-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "invalid-fallback",
+        { ...input, agentScope: "project", confirmProjectAgents: false },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
 
   it("rejects invalid watchdog limits before spawning a child", async () => {
     const project = createPersistenceTestProject(

@@ -10,19 +10,20 @@ The `agent` tool runs tasks in one of three modes: single, parallel, or chained.
 
 ## Parameters
 
-| Parameter              | Type    | Behavior                                                                                                                                                                     |
-| ---------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`                | string  | Name of the agent to invoke. Mutually exclusive with `subagent_type`.                                                                                                        |
-| `subagent_type`        | string  | Select an agent by type, for example `planning` or `review`.                                                                                                                 |
-| `task`                 | string  | Task text for single mode.                                                                                                                                                   |
-| `model`                | string  | Model as `provider/id`, or `inherit` for the parent model. Overrides settings and frontmatter.                                                                               |
-| `thinking`             | string  | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `inherit` for the parent level. Overrides settings and frontmatter.                                            |
-| `watchdog`             | object  | Optional deadlines in seconds: `idleSeconds` (default 300), `toolSeconds` (default 600), and `taskSeconds` (default 1800). Set an individual limit to `null` to disable it.  |
-| `tasks`                | array   | Parallel mode. Each item accepts `agent`, `subagent_type`, `task`, `cwd`, `model`, `thinking`, and `watchdog`. Item watchdog fields override only matching top-level fields. |
-| `chain`                | array   | Sequential mode. Same item fields as `tasks`.                                                                                                                                |
-| `agentScope`           | string  | `user`, `project`, or `both`. Default `user`.                                                                                                                                |
-| `confirmProjectAgents` | boolean | Prompt before project-local agents run. Default `true`.                                                                                                                      |
-| `cwd`                  | string  | Working directory for single mode.                                                                                                                                           |
+| Parameter              | Type    | Behavior                                                                                                                                                                                      |
+| ---------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                | string  | Name of the agent to invoke. Mutually exclusive with `subagent_type`.                                                                                                                         |
+| `subagent_type`        | string  | Select an agent by type, for example `planning` or `review`.                                                                                                                                  |
+| `task`                 | string  | Task text for single mode.                                                                                                                                                                    |
+| `model`                | string  | Model as `provider/id`, or `inherit` for the parent model. Overrides settings and frontmatter.                                                                                                |
+| `modelFallback`        | string  | `configured` (default) permits model retries; `none` prevents extension-managed fallback. Items can override the top-level value.                                                             |
+| `thinking`             | string  | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `inherit` for the parent level. Overrides settings and frontmatter.                                                             |
+| `watchdog`             | object  | Optional deadlines in seconds: `idleSeconds` (default 300), `toolSeconds` (default 600), and `taskSeconds` (default 1800). Set an individual limit to `null` to disable it.                   |
+| `tasks`                | array   | Parallel mode. Each item accepts `agent`, `subagent_type`, `task`, `cwd`, `model`, `modelFallback`, `thinking`, and `watchdog`. Item watchdog fields override only matching top-level fields. |
+| `chain`                | array   | Sequential mode. Same item fields as `tasks`.                                                                                                                                                 |
+| `agentScope`           | string  | `user`, `project`, or `both`. Default `user`.                                                                                                                                                 |
+| `confirmProjectAgents` | boolean | Prompt before project-local agents run. Default `true`.                                                                                                                                       |
+| `cwd`                  | string  | Working directory for single mode.                                                                                                                                                            |
 
 In a chain, step N+1 receives step N's report wherever its task contains `{previous}`.
 
@@ -41,6 +42,14 @@ In parallel mode, only the timed-out child is stopped. The synchronous call stil
 ## Model priority
 
 The tool resolves each agent's model in this order: the tool input `model`, the settings override, the agent frontmatter, then the parent agent's model. For thinking, the order is tool input, settings override, frontmatter, then the parent level. Set both `model` and `thinking` to `inherit` to use the parent's current values even when settings or frontmatter specify different values. Settings overrides are described in [Subagent overrides](subagent-overrides.md).
+
+For parallel and chain calls, `modelFallback: "none"` requires a concrete model selection. The runner checks every strict item before it starts any child. A top-level policy applies to each item unless the item specifies its own policy. An explicit strict `model: "inherit"` requires the parent model to be available.
+
+## Model provenance
+
+Result artifacts and the inspector separate the requested selection, resolved candidates, attempted launch selections, observed Pi dispatch identities, and provider-reported response model IDs. `child default` means the runner passed no model argument. An empty observation is `unknown`. Multiple identities are listed separately. A dispatch identity can come from an error event and does not prove that a model generated a response. Provider response IDs appear only when Pi supplies them. A response ID on an error does not prove that a model generated output.
+
+The legacy `Model` field records the last launch selection when one was supplied. Older results may have only that field. A selection is not proof of dispatch: Pi can resolve model names or providers differently, and provider routing or virtual models can hide the physical model. These records do not enforce or prove an exact physical model.
 
 ## Agent scope
 

@@ -1,7 +1,8 @@
 ---
 name: researcher
 description: Resolves external technical questions with primary sources. Use when a decision depends on API behavior, documentation, release history, compatibility, or prior implementations not established by the repository.
-model: openai-codex/gpt-6-luna
+model: openai/gpt-6-luna
+thinking: medium
 tools: read, rg, fd, ls, bash, web_search, web_fetch
 subagent_type: research
 ---

@@ -1,7 +1,8 @@
 ---
 name: implementer
 description: Implements an independently bounded coding task from an approved design and known scope. Use when delegation adds isolation, safe parallelism, or author-reviewer separation.
-model: openai-codex/gpt-6-luna
+model: openai/gpt-6-luna
+thinking: high
 subagent_type: implementation
 ---
 

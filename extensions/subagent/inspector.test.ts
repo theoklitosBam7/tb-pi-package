@@ -662,6 +662,25 @@ describe("subagent inspector store", () => {
 });
 
 describe("subagent inspector TUI", () => {
+  it("shows model provenance separately in the detail view", () => {
+    const store = new AgentInspectorStore();
+    const run = store.start({ agent: "worker", task: "Review" });
+    run.setModelProvenance({
+      requested: "inherit",
+      resolved: ["test/one"],
+      attempted: ["test/one"],
+      dispatch: ["other/two"],
+      response: ["version-3"],
+    });
+    const { component } = inspectorView(store, 30, 100);
+    component.handleInput("\r");
+    const text = component.render(100).join("\n");
+    expect(text).toContain("Requested selection: inherit");
+    expect(text).toContain("Attempted selections: test/one");
+    expect(text).toContain("Observed dispatch: other/two");
+    expect(text).toContain("Provider-reported response model: version-3");
+    component.dispose();
+  });
   it("stops a running run only from its detail view", () => {
     const store = new AgentInspectorStore();
     const finished = store.start({ agent: "finished", task: "Done" });

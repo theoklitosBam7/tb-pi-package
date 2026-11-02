@@ -7,6 +7,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "./agents.js";
+import type { ModelProvenance } from "./result.js";
 
 const MAX_COMPLETED_RUNS = 50;
 const MAX_RUN_CHARS = 64_000;
@@ -58,6 +59,7 @@ interface AgentInspectorRun {
   agent: string;
   task: string;
   model?: string;
+  modelProvenance?: ModelProvenance;
   thinking?: SubagentThinkingLevel;
   status: AgentInspectorStatus;
   cleanup?: "unknown";
@@ -69,6 +71,7 @@ interface AgentInspectorRun {
 
 export interface AgentInspectorRunHandle {
   setModel(model: string | undefined): void;
+  setModelProvenance(provenance: ModelProvenance): void;
   setText(text: string): void;
   messageStart(text?: string): void;
   appendText(delta: string): void;
@@ -193,6 +196,11 @@ export class AgentInspectorStore {
       setModel: (model) => {
         if (!isActive()) return;
         run.model = model;
+        this.notify();
+      },
+      setModelProvenance: (provenance) => {
+        if (!isActive()) return;
+        run.modelProvenance = structuredClone(provenance);
         this.notify();
       },
       setText: (text) => {
@@ -525,7 +533,20 @@ export class AgentInspectorComponent {
   private detailLines(run: AgentInspectorRun, width: number): string[] {
     const lines: string[] = [];
     if (run.cleanup) lines.push(this.theme.fg("warning", "Cleanup: unknown"));
-    if (run.model) lines.push(`${this.theme.fg("muted", "Model:")} ${run.model}`);
+    if (run.modelProvenance) {
+      const provenance = run.modelProvenance;
+      lines.push(`Requested selection: ${provenance.requested ?? "not specified"}`);
+      lines.push(
+        `Resolved selections: ${provenance.resolved.map((model) => model ?? "child default").join(", ") || "none"}`,
+      );
+      lines.push(
+        `Attempted selections: ${provenance.attempted.map((model) => model ?? "child default").join(", ") || "none"}`,
+      );
+      lines.push(`Observed dispatch: ${provenance.dispatch.join(", ") || "unknown"}`);
+      lines.push(
+        `Provider-reported response model: ${provenance.response.join(", ") || "unknown"}`,
+      );
+    } else if (run.model) lines.push(`${this.theme.fg("muted", "Model:")} ${run.model}`);
     lines.push(`${this.theme.fg("muted", "Thinking:")} ${getSubagentThinkingLabel(run.thinking)}`);
     lines.push(this.theme.fg("muted", "Task:"), ...run.task.split("\n"));
     if (run.activityTruncated) lines.push(this.theme.fg("warning", ACTIVITY_NOTICE));

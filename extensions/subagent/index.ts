@@ -556,6 +556,7 @@ type RunSingleAgentOptions = {
   makeDetails: (results: SingleResult[]) => SubagentDetails;
   overrides: AgentOverridesSnapshot;
   modelOverride?: string; // Model from tool input, takes priority
+  modelFallback?: "configured" | "none";
   mainAgentModel?: string; // Fallback: main agent's current model
   mainAgentThinking?: SubagentThinkingLevel; // Fallback: main agent's current thinking level
   thinkingOverride?: SubagentThinkingLevel | "inherit";
@@ -576,6 +577,7 @@ async function runSingleAgent({
   makeDetails,
   overrides,
   modelOverride,
+  modelFallback,
   mainAgentModel,
   mainAgentThinking,
   thinkingOverride,
@@ -642,7 +644,49 @@ async function runSingleAgent({
       thinkingOverride,
     },
   );
-  const { modelsToTry } = resolvedOptions;
+  const modelsToTry =
+    modelFallback === "none"
+      ? resolvedOptions.modelsToTry.slice(0, 1)
+      : resolvedOptions.modelsToTry;
+  if (
+    modelFallback === "none" &&
+    ((modelOverride === "inherit" && !mainAgentModel) || !modelsToTry[0])
+  ) {
+    return {
+      agent: resolvedName,
+      agentSource: agent.source,
+      task,
+      exitCode: 1,
+      messages: [],
+      stderr:
+        "Strict model selection requires a concrete model; the requested parent model may be unavailable.",
+      modelProvenance: {
+        requested: modelOverride,
+        resolved: [],
+        attempted: [],
+        dispatch: [],
+        response: [],
+      },
+      thinkingKind: "not-run",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 0,
+        turns: 0,
+      },
+      step,
+    };
+  }
+  const modelProvenance: NonNullable<SingleResult["modelProvenance"]> = {
+    requested: modelOverride,
+    resolved: modelsToTry.map((model) => model ?? null),
+    attempted: [],
+    dispatch: [],
+    response: [],
+  };
   const taskStartedAt = performance.now();
   const runAbortController = new AbortController();
   const forwardAbort = () => runAbortController.abort();
@@ -654,6 +698,7 @@ async function runSingleAgent({
     model: modelsToTry[0],
     thinking: resolvedOptions.thinking,
   });
+  inspectorRun?.setModelProvenance(modelProvenance);
   inspectorRun?.setStopper(() => runAbortController.abort());
 
   // Helper function to run with a specific model
@@ -680,6 +725,7 @@ async function runSingleAgent({
         turns: 0,
       },
       model: model,
+      modelProvenance,
       ...resolveResultThinking(resolvedOptions.thinking),
       systemPromptOverridden: resolvedOptions.systemPromptOverridden,
       step,
@@ -739,6 +785,8 @@ async function runSingleAgent({
       let watchdogTermination: WatchdogTermination | undefined;
       const exitCode = await new Promise<number>((resolve) => {
         const invocation = getPiInvocation(args);
+        modelProvenance.attempted.push(model ?? null);
+        inspectorRun?.setModelProvenance(modelProvenance);
         const proc = spawn(invocation.command, invocation.args, {
           cwd: cwd ?? defaultCwd,
           shell: false,
@@ -861,6 +909,27 @@ async function runSingleAgent({
         };
         scheduleWatchdog();
 
+        const captureDispatch = (message: unknown) => {
+          if (
+            !message ||
+            typeof message !== "object" ||
+            !("role" in message) ||
+            message.role !== "assistant" ||
+            !("provider" in message) ||
+            typeof message.provider !== "string" ||
+            !message.provider ||
+            !("model" in message) ||
+            typeof message.model !== "string" ||
+            !message.model
+          )
+            return;
+          const identity = `${message.provider}/${message.model}`;
+          if (!modelProvenance.dispatch.includes(identity)) {
+            modelProvenance.dispatch.push(identity);
+            inspectorRun?.setModelProvenance(modelProvenance);
+          }
+        };
+
         const processLine = (line: string) => {
           if (!line.trim()) return;
           let event: any;
@@ -873,6 +942,7 @@ async function runSingleAgent({
           if (!event || typeof event !== "object" || Array.isArray(event)) return;
 
           if (event.type === "message_start") {
+            captureDispatch(event.message);
             const messageKey = getMessageLifecycleKey(event.message, true);
             if (messageKey) {
               startedMessages.set(messageKey, (startedMessages.get(messageKey) ?? 0) + 1);
@@ -942,12 +1012,21 @@ async function runSingleAgent({
             else startedMessages.set(messageKey, startedCount - 1);
 
             const msg = event.message as Message;
+            captureDispatch(msg);
             recordProgress();
             captureNestedUsage(msg);
             currentResult.messages.push(msg);
 
             if (msg.role === "assistant") {
               inspectorRun?.messageEnd(getInspectorMessageText(msg));
+              if (
+                typeof msg.responseModel === "string" &&
+                msg.responseModel &&
+                !modelProvenance.response.includes(msg.responseModel)
+              ) {
+                modelProvenance.response.push(msg.responseModel);
+                inspectorRun?.setModelProvenance(modelProvenance);
+              }
               currentResult.usage.turns++;
               const usage = msg.usage;
               if (usage) {
@@ -1178,6 +1257,8 @@ const ModelInput = Type.String({
     "Model as provider/id, or 'inherit' for the parent model. Overrides settings and frontmatter.",
 });
 
+const ModelFallbackInput = StringEnum(["configured", "none"] as const);
+
 const WatchdogLimit = Type.Union([
   Type.Integer({ minimum: 1, maximum: MAX_WATCHDOG_SECONDS }),
   Type.Null(),
@@ -1206,6 +1287,7 @@ function resolveWatchdog(override?: Partial<WatchdogConfig>): WatchdogConfig {
 }
 
 const TaskItem = Type.Object({
+  modelFallback: Type.Optional(ModelFallbackInput),
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
   subagent_type: Type.Optional(
     Type.String({
@@ -1221,6 +1303,7 @@ const TaskItem = Type.Object({
 });
 
 const ChainItem = Type.Object({
+  modelFallback: Type.Optional(ModelFallbackInput),
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
   subagent_type: Type.Optional(
     Type.String({
@@ -1257,6 +1340,7 @@ const SubagentParams = Type.Object({
   ),
   task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
   model: Type.Optional(ModelInput),
+  modelFallback: Type.Optional(ModelFallbackInput),
   thinking: Type.Optional(ThinkingInput),
   watchdog: Type.Optional(
     Type.Object(
@@ -1369,6 +1453,29 @@ export default function (pi: ExtensionAPI) {
       const discovery = discoverAgents(ctx.cwd, agentScope);
       const agents = discovery.agents;
       const confirmProjectAgents = params.confirmProjectAgents ?? true;
+
+      const fallbackValues = [
+        params.modelFallback,
+        ...(params.tasks ?? []).map((item) => item.modelFallback),
+        ...(params.chain ?? []).map((item) => item.modelFallback),
+      ];
+      if (
+        fallbackValues.some(
+          (value) => value !== undefined && value !== "configured" && value !== "none",
+        )
+      ) {
+        return {
+          content: [{ type: "text", text: "Model fallback must be 'configured' or 'none'." }],
+          details: {
+            usageVersion: 3,
+            mode: "single",
+            agentScope,
+            projectAgentsDir: discovery.projectAgentsDir,
+            results: [],
+          },
+          isError: true,
+        };
+      }
 
       const topWatchdog = resolveWatchdog(params.watchdog);
       const watchdogItems = [...(params.tasks ?? []), ...(params.chain ?? [])];
@@ -1521,6 +1628,38 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
+      const batchItems = hasChain ? params.chain : hasTasks ? params.tasks : undefined;
+      for (const [index, item] of (batchItems ?? []).entries()) {
+        if ((item.modelFallback ?? params.modelFallback) !== "none") continue;
+        const resolution = resolveAgent(agents, item.agent, item.subagent_type);
+        if (resolution.error || !resolution.agent || !resolution.resolvedName) continue;
+        const overrideEntry = getAgentOverride(overrides, resolution.resolvedName);
+        if (getAgentConfigurationError(resolution.agent, overrideEntry) !== undefined) continue;
+        const modelOverride = item.model ?? params.model;
+        const options = resolveAgentOptions(
+          resolution.agent,
+          overrideEntry?.kind === "valid" ? overrideEntry.value : undefined,
+          {
+            modelOverride,
+            parentModel: mainAgentModel,
+            parentThinking: mainAgentThinking,
+            thinkingOverride: item.thinking ?? params.thinking,
+          },
+        );
+        if ((modelOverride === "inherit" && !mainAgentModel) || !options.modelsToTry[0]) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${hasChain ? "Chain step" : "Task"} ${index + 1}: Strict model selection requires a concrete model; the requested parent model may be unavailable.`,
+              },
+            ],
+            details: makeDetails(requestedMode)([]),
+            isError: true,
+          };
+        }
+      }
+
       if (
         (agentScope === "project" || agentScope === "both") &&
         confirmProjectAgents &&
@@ -1637,6 +1776,7 @@ export default function (pi: ExtensionAPI) {
             makeDetails: makeDetails("chain"),
             overrides,
             modelOverride: step.model ?? params.model, // step.model takes priority, then top-level params.model
+            modelFallback: step.modelFallback ?? params.modelFallback,
             mainAgentModel,
             mainAgentThinking,
             thinkingOverride: step.thinking ?? params.thinking,
@@ -1781,6 +1921,7 @@ export default function (pi: ExtensionAPI) {
               makeDetails: makeDetails("parallel"),
               overrides,
               modelOverride: t.model ?? params.model, // task.model takes priority, then top-level params.model
+              modelFallback: t.modelFallback ?? params.modelFallback,
               mainAgentModel,
               mainAgentThinking,
               thinkingOverride: t.thinking ?? params.thinking,
@@ -1830,6 +1971,7 @@ export default function (pi: ExtensionAPI) {
           makeDetails: makeDetails("single"),
           overrides,
           modelOverride: params.model, // top-level model for single mode
+          modelFallback: params.modelFallback,
           mainAgentModel,
           mainAgentThinking,
           thinkingOverride: params.thinking,

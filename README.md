@@ -18,7 +18,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 - **Session cost report** — View main-agent, subagent, nested, and combined token and cost totals with `/session-costs`.
 - **Automatic recaps** — Recap completed work with a separate model. Use `/summary` to save the global model and thinking level in `~/.pi/agent/summary.json` (defaults: `openai/gpt-6-luna`, thinking `medium`), `/summary status` to inspect them, or `/summary reset` to restore the defaults. These requests add provider costs.
 - **Voice dictation** — Select a Foundry Local speech model with `/dictate model`, then use `/dictate` or Control+Option+R to add speech to the editor.
-- **4 built-in agents:** Scout, researcher, implementer, and reviewer, each tuned for a specific task.
+- **6 built-in agents:** Generalist, oracle, scout, researcher, implementer, and reviewer.
 - **Workflow prompts:** Reusable templates for scouting, research, implementation, review, implementation review, and wiki generation.
 
 ## Installation

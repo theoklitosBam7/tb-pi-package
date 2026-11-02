@@ -59,6 +59,14 @@ export interface WatchdogTermination {
 
 export type SubagentTermination = WatchdogTermination | { kind: "abort"; cleanup: "unknown" };
 
+export interface ModelProvenance {
+  requested?: string;
+  resolved: Array<string | null>;
+  attempted: Array<string | null>;
+  dispatch: string[];
+  response: string[];
+}
+
 interface SingleResultData {
   agent: string;
   agentSource: "user" | "project" | "unknown";
@@ -70,6 +78,7 @@ interface SingleResultData {
   descendantUsage?: UsageTotals;
   descendantRuns?: number;
   model?: string;
+  modelProvenance?: ModelProvenance;
   systemPromptOverridden?: boolean;
   stopReason?: string;
   errorMessage?: string;
@@ -131,6 +140,7 @@ function formatArtifactMarkdown(options: {
   agent: string;
   status: "completed" | "failed" | "aborted" | "timed out";
   model?: string;
+  modelProvenance?: ModelProvenance;
   thinkingLabel: string;
   exitCode: number;
   stopReason?: string;
@@ -148,6 +158,15 @@ function formatArtifactMarkdown(options: {
     `- Agent: ${options.agent}`,
     `- Status: ${options.status}`,
     `- Model: ${options.model ?? "unknown"}`,
+    ...(options.modelProvenance
+      ? [
+          `- Requested selection: ${options.modelProvenance.requested ?? "not specified"}`,
+          `- Resolved selections: ${options.modelProvenance.resolved.map((model) => model ?? "child default").join(", ") || "none"}`,
+          `- Attempted selections: ${options.modelProvenance.attempted.map((model) => model ?? "child default").join(", ") || "none"}`,
+          `- Observed dispatch: ${options.modelProvenance.dispatch.join(", ") || "unknown"}`,
+          `- Provider-reported response model: ${options.modelProvenance.response.join(", ") || "unknown"}`,
+        ]
+      : []),
     `- Thinking: ${options.thinkingLabel}`,
     `- Exit code: ${options.exitCode}`,
     ...(options.stopReason ? [`- Stop reason: ${options.stopReason}`] : []),
@@ -305,6 +324,7 @@ export async function writeResultArtifact(options: {
     agent: result.agent,
     status,
     model: result.model,
+    modelProvenance: result.modelProvenance,
     thinkingLabel: formatResultThinking(result),
     exitCode: result.exitCode,
     stopReason: result.stopReason,
