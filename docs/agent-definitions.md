@@ -35,10 +35,12 @@ Review changes for correctness and test coverage.
 
 ## Built-in agents
 
-The package ships four agents in `agents/`. Each has a fixed role and a tool set:
+The package ships six agents in `agents/`. Each has a role and a tool set:
 
 | Agent         | Type             | Tools                                                       | Role                                                                        |
 | ------------- | ---------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `generalist`  | `generalist`     | Pi defaults                                                 | Carries out a bounded task when no specialist fits                          |
+| `oracle`      | `oracle`         | `read`, `rg`, `fd`, `ls`, `bash`, `web_search`, `web_fetch` | Advises on blockers and uncertain solutions                                 |
 | `scout`       | `exploration`    | `read`, `rg`, `fd`, `ls`, `bash`                            | Maps files, execution paths, tests, constraints, and unknowns               |
 | `researcher`  | `research`       | `read`, `rg`, `fd`, `ls`, `bash`, `web_search`, `web_fetch` | Answers external technical questions with traceable primary-source evidence |
 | `implementer` | `implementation` | Pi defaults                                                 | Implements a bounded task and reports tests and validation                  |

@@ -16,6 +16,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -70,6 +71,7 @@ import {
   isCompletedResult,
   type ResultThinking,
   type SingleResult,
+  type WatchdogTermination,
   writeResultArtifact,
 } from "./result.js";
 
@@ -136,6 +138,118 @@ function resolveAgent(
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
+const WATCHDOG_CLEANUP_GRACE_MS = 5_000;
+const WATCHDOG_CLOSE_WAIT_MS = 1_000;
+const MAX_WATCHDOG_SECONDS = 2_147_483;
+const DEFAULT_WATCHDOG = { idleSeconds: 300, toolSeconds: 600, taskSeconds: 1800 } as const;
+type WatchdogConfig = {
+  idleSeconds: number | null;
+  toolSeconds: number | null;
+  taskSeconds: number | null;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function getMessageLifecycleKey(value: unknown, allowPending = false): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const message = value;
+  const { role, timestamp, content } = message;
+  const supportedRoles = [
+    "assistant",
+    "toolResult",
+    "user",
+    "system",
+    "custom",
+    "bashExecution",
+    "branchSummary",
+    "compactionSummary",
+  ];
+  if (
+    typeof role !== "string" ||
+    !supportedRoles.includes(role) ||
+    typeof timestamp !== "number" ||
+    !Number.isFinite(timestamp)
+  ) {
+    return undefined;
+  }
+  if (role === "bashExecution") {
+    if (
+      typeof message.command !== "string" ||
+      typeof message.output !== "string" ||
+      (message.exitCode !== undefined && typeof message.exitCode !== "number") ||
+      typeof message.cancelled !== "boolean" ||
+      typeof message.truncated !== "boolean"
+    ) {
+      return undefined;
+    }
+  } else if (role === "branchSummary") {
+    if (
+      typeof message.summary !== "string" ||
+      !(message.fromId === null || typeof message.fromId === "string")
+    ) {
+      return undefined;
+    }
+  } else if (role === "compactionSummary") {
+    if (typeof message.summary !== "string" || typeof message.tokensBefore !== "number") {
+      return undefined;
+    }
+  } else {
+    if (
+      !(
+        typeof content === "string" ||
+        (Array.isArray(content) &&
+          content.every((part) => isRecord(part) && typeof part.type === "string"))
+      ) ||
+      ((role === "assistant" || role === "toolResult") && !Array.isArray(content))
+    ) {
+      return undefined;
+    }
+  }
+  if (role === "assistant") {
+    if (
+      typeof message.api !== "string" ||
+      typeof message.provider !== "string" ||
+      typeof message.model !== "string" ||
+      typeof message.stopReason !== "string" ||
+      ![
+        "stop",
+        "length",
+        "toolUse",
+        "error",
+        "aborted",
+        "deferred",
+        ...(allowPending ? ["pending"] : []),
+      ].includes(message.stopReason)
+    ) {
+      return undefined;
+    }
+    const usage = message.usage;
+    if (usage !== undefined) {
+      if (
+        !isRecord(usage) ||
+        !["input", "output", "cacheRead", "cacheWrite", "totalTokens"].every(
+          (field) => typeof usage[field] === "number" && Number.isFinite(usage[field]),
+        ) ||
+        !isRecord(usage.cost) ||
+        typeof usage.cost.total !== "number" ||
+        !Number.isFinite(usage.cost.total)
+      ) {
+        return undefined;
+      }
+    }
+  }
+  if (
+    role === "toolResult" &&
+    (typeof message.toolCallId !== "string" ||
+      typeof message.toolName !== "string" ||
+      typeof message.isError !== "boolean")
+  ) {
+    return undefined;
+  }
+  return `${role}:${timestamp}`;
+}
 
 function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -373,17 +487,49 @@ export function buildSubagentArgs(options: {
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
-function isModelOrApiKeyError(stderr: string): boolean {
-  const lowerStderr = stderr.toLowerCase();
+function formatWatchdogSummary(termination: WatchdogTermination): string {
+  const activeTool = termination.activeTool
+    ? `; active tool: ${termination.activeTool} (${termination.toolElapsedSeconds ?? 0}s)`
+    : "";
   return (
-    lowerStderr.includes("no api key") ||
-    lowerStderr.includes("api key") ||
-    (lowerStderr.includes("model") &&
-      (lowerStderr.includes("not found") ||
-        lowerStderr.includes("unavailable") ||
-        lowerStderr.includes("not available"))) ||
-    (lowerStderr.includes("provider") && lowerStderr.includes("error"))
+    `Watchdog ${termination.deadline} deadline (${termination.limitSeconds}s) expired; ` +
+    `elapsed: ${termination.elapsedSeconds}s; ` +
+    `progress age: ${termination.lastProgressAgeSeconds}s${activeTool}; ` +
+    `cleanup: ${termination.cleanup}.`
   );
+}
+
+function sanitizeWatchdogToolName(name: string): string {
+  return /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(name) ? name : "redacted";
+}
+
+function createModelErrorMatcher() {
+  const terms = [
+    "api key",
+    "model",
+    "not found",
+    "unavailable",
+    "not available",
+    "provider",
+    "error",
+  ] as const;
+  const found = new Set<string>();
+  let tail = "";
+  return {
+    consume(text: string) {
+      const input = tail + text.toLowerCase();
+      for (const term of terms) if (input.includes(term)) found.add(term);
+      tail = input.slice(-12);
+    },
+    matches() {
+      return (
+        found.has("api key") ||
+        (found.has("model") &&
+          (found.has("not found") || found.has("unavailable") || found.has("not available"))) ||
+        (found.has("provider") && found.has("error"))
+      );
+    },
+  };
 }
 
 function markResultAborted(result: SingleResult): void {
@@ -410,10 +556,12 @@ type RunSingleAgentOptions = {
   makeDetails: (results: SingleResult[]) => SubagentDetails;
   overrides: AgentOverridesSnapshot;
   modelOverride?: string; // Model from tool input, takes priority
+  modelFallback?: "configured" | "none";
   mainAgentModel?: string; // Fallback: main agent's current model
   mainAgentThinking?: SubagentThinkingLevel; // Fallback: main agent's current thinking level
   thinkingOverride?: SubagentThinkingLevel | "inherit";
   inspector?: AgentInspectorStore;
+  watchdog: WatchdogConfig;
 };
 
 async function runSingleAgent({
@@ -429,10 +577,12 @@ async function runSingleAgent({
   makeDetails,
   overrides,
   modelOverride,
+  modelFallback,
   mainAgentModel,
   mainAgentThinking,
   thinkingOverride,
   inspector,
+  watchdog,
 }: RunSingleAgentOptions): Promise<SingleResult> {
   const resolution = resolveAgent(agents, agentName, subagentType);
 
@@ -494,7 +644,50 @@ async function runSingleAgent({
       thinkingOverride,
     },
   );
-  const { modelsToTry } = resolvedOptions;
+  const modelsToTry =
+    modelFallback === "none"
+      ? resolvedOptions.modelsToTry.slice(0, 1)
+      : resolvedOptions.modelsToTry;
+  if (
+    modelFallback === "none" &&
+    ((modelOverride === "inherit" && !mainAgentModel) || !modelsToTry[0])
+  ) {
+    return {
+      agent: resolvedName,
+      agentSource: agent.source,
+      task,
+      exitCode: 1,
+      messages: [],
+      stderr:
+        "Strict model selection requires a concrete model; the requested parent model may be unavailable.",
+      modelProvenance: {
+        requested: modelOverride,
+        resolved: [],
+        attempted: [],
+        dispatch: [],
+        response: [],
+      },
+      thinkingKind: "not-run",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0,
+        contextTokens: 0,
+        turns: 0,
+      },
+      step,
+    };
+  }
+  const modelProvenance: NonNullable<SingleResult["modelProvenance"]> = {
+    requested: modelOverride,
+    resolved: modelsToTry.map((model) => model ?? null),
+    attempted: [],
+    dispatch: [],
+    response: [],
+  };
+  const taskStartedAt = performance.now();
   const runAbortController = new AbortController();
   const forwardAbort = () => runAbortController.abort();
   if (signal?.aborted) forwardAbort();
@@ -505,10 +698,13 @@ async function runSingleAgent({
     model: modelsToTry[0],
     thinking: resolvedOptions.thinking,
   });
+  inspectorRun?.setModelProvenance(modelProvenance);
   inspectorRun?.setStopper(() => runAbortController.abort());
 
   // Helper function to run with a specific model
+  let modelErrorMatcher = createModelErrorMatcher();
   const runWithModel = async (model: string | undefined): Promise<SingleResult> => {
+    modelErrorMatcher = createModelErrorMatcher();
     let tmpPromptDir: string | null = null;
     let tmpPromptPath: string | null = null;
 
@@ -529,6 +725,7 @@ async function runSingleAgent({
         turns: 0,
       },
       model: model,
+      modelProvenance,
       ...resolveResultThinking(resolvedOptions.thinking),
       systemPromptOverridden: resolvedOptions.systemPromptOverridden,
       step,
@@ -585,16 +782,153 @@ async function runSingleAgent({
         return currentResult;
       }
 
+      let watchdogTermination: WatchdogTermination | undefined;
       const exitCode = await new Promise<number>((resolve) => {
         const invocation = getPiInvocation(args);
+        modelProvenance.attempted.push(model ?? null);
+        inspectorRun?.setModelProvenance(modelProvenance);
         const proc = spawn(invocation.command, invocation.args, {
           cwd: cwd ?? defaultCwd,
           shell: false,
           stdio: ["ignore", "pipe", "pipe"],
+          detached: process.platform !== "win32",
         });
         let buffer = "";
+        let discardingLine = false;
+        let stdoutTruncated = false;
+        const stdoutDecoder = new StringDecoder("utf8");
+        const stderrDecoder = new StringDecoder("utf8");
+        let stderrTruncated = false;
         let closed = false;
+        let directChildExited = false;
         let cleanupAbort = () => {};
+        const runStartedAt = performance.now();
+        let lastProgressAt = runStartedAt;
+        const activeTools = new Map<string, { name: string; startedAt: number; update: string }>();
+        const startedMessages = new Map<string, number>();
+        let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
+        let escalationTimer: ReturnType<typeof setTimeout> | undefined;
+        let boundedCloseTimer: ReturnType<typeof setTimeout> | undefined;
+        let finishRun: ((exitCode: number) => void) | undefined;
+        const now = () => performance.now();
+        const sendCleanupSignal = (signalName: NodeJS.Signals) => {
+          if (closed || directChildExited) return;
+          if (process.platform !== "win32" && typeof proc.pid === "number" && proc.pid > 0) {
+            try {
+              process.kill(-proc.pid, signalName);
+              return;
+            } catch {
+              // Fall back to the ChildProcess handle, which identifies this child.
+            }
+          }
+          try {
+            proc.kill(signalName);
+          } catch {
+            // Cleanup remains unknown when the operating system rejects a signal.
+          }
+        };
+        const recordProgress = () => {
+          if (watchdogTermination) return;
+          lastProgressAt = now();
+          scheduleWatchdog();
+        };
+        const scheduleWatchdog = () => {
+          if (watchdogTermination) return;
+          if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
+          const currentTime = now();
+          const deadlines: Array<{
+            deadline: WatchdogTermination["deadline"];
+            dueAt: number;
+            limitSeconds: number;
+            toolId?: string;
+          }> = [];
+          if (watchdog.idleSeconds !== null)
+            deadlines.push({
+              deadline: "idle",
+              dueAt: lastProgressAt + watchdog.idleSeconds * 1000,
+              limitSeconds: watchdog.idleSeconds,
+            });
+          if (watchdog.taskSeconds !== null)
+            deadlines.push({
+              deadline: "task",
+              dueAt: taskStartedAt + watchdog.taskSeconds * 1000,
+              limitSeconds: watchdog.taskSeconds,
+            });
+          if (watchdog.toolSeconds !== null) {
+            for (const [toolId, tool] of activeTools)
+              deadlines.push({
+                deadline: "tool",
+                dueAt: tool.startedAt + watchdog.toolSeconds * 1000,
+                limitSeconds: watchdog.toolSeconds,
+                toolId,
+              });
+          }
+          if (deadlines.length === 0) return;
+          const priority = { task: 0, tool: 1, idle: 2 };
+          deadlines.sort(
+            (a, b) => a.dueAt - b.dueAt || priority[a.deadline] - priority[b.deadline],
+          );
+          const next = deadlines[0];
+          watchdogTimer = setTimeout(
+            () => {
+              const expiredAt = now();
+              const expired = deadlines.find((deadline) => deadline.dueAt <= expiredAt);
+              if (closed || runAbortController.signal.aborted) return;
+              if (!expired) return scheduleWatchdog();
+              const active = expired.toolId
+                ? activeTools.get(expired.toolId)
+                : activeTools.values().next().value;
+              watchdogTermination = {
+                kind: "watchdog",
+                deadline: expired.deadline,
+                limitSeconds: expired.limitSeconds,
+                elapsedSeconds: Math.max(0, Math.round((expiredAt - runStartedAt) / 1000)),
+                ...(active
+                  ? {
+                      activeTool: sanitizeWatchdogToolName(active.name),
+                      toolElapsedSeconds: Math.max(
+                        0,
+                        Math.round((expiredAt - active.startedAt) / 1000),
+                      ),
+                    }
+                  : {}),
+                lastProgressAgeSeconds: Math.max(
+                  0,
+                  Math.round((expiredAt - lastProgressAt) / 1000),
+                ),
+                cleanup: "unknown",
+              };
+              sendCleanupSignal("SIGTERM");
+              escalationTimer = setTimeout(() => {
+                if (!closed && !directChildExited) sendCleanupSignal("SIGKILL");
+                boundedCloseTimer = setTimeout(() => finishRun?.(1), WATCHDOG_CLOSE_WAIT_MS);
+              }, WATCHDOG_CLEANUP_GRACE_MS);
+            },
+            Math.max(0, next.dueAt - currentTime),
+          );
+        };
+        scheduleWatchdog();
+
+        const captureDispatch = (message: unknown) => {
+          if (
+            !message ||
+            typeof message !== "object" ||
+            !("role" in message) ||
+            message.role !== "assistant" ||
+            !("provider" in message) ||
+            typeof message.provider !== "string" ||
+            !message.provider ||
+            !("model" in message) ||
+            typeof message.model !== "string" ||
+            !message.model
+          )
+            return;
+          const identity = `${message.provider}/${message.model}`;
+          if (!modelProvenance.dispatch.includes(identity)) {
+            modelProvenance.dispatch.push(identity);
+            inspectorRun?.setModelProvenance(modelProvenance);
+          }
+        };
 
         const processLine = (line: string) => {
           if (!line.trim()) return;
@@ -605,26 +939,64 @@ async function runSingleAgent({
             return;
           }
 
-          if (event.type === "message_start" && event.message?.role === "assistant") {
-            inspectorRun?.messageStart(getInspectorMessageText(event.message));
+          if (!event || typeof event !== "object" || Array.isArray(event)) return;
+
+          if (event.type === "message_start") {
+            captureDispatch(event.message);
+            const messageKey = getMessageLifecycleKey(event.message, true);
+            if (messageKey) {
+              startedMessages.set(messageKey, (startedMessages.get(messageKey) ?? 0) + 1);
+            }
+            if (event.message?.role === "assistant" && messageKey) {
+              inspectorRun?.messageStart(getInspectorMessageText(event.message));
+            }
           }
 
           if (event.type === "message_update" && event.assistantMessageEvent) {
             const assistantEvent = event.assistantMessageEvent;
+            if (
+              (assistantEvent.type === "text_delta" || assistantEvent.type === "thinking_delta") &&
+              typeof assistantEvent.delta === "string" &&
+              assistantEvent.delta.length > 0
+            ) {
+              recordProgress();
+            }
             if (assistantEvent.type === "text_delta" && typeof assistantEvent.delta === "string") {
               inspectorRun?.appendText(assistantEvent.delta);
             }
           }
 
-          if (event.type === "tool_execution_start" && event.toolCallId && event.toolName) {
+          if (
+            event.type === "tool_execution_start" &&
+            typeof event.toolCallId === "string" &&
+            event.toolCallId.length > 0 &&
+            typeof event.toolName === "string" &&
+            event.toolName.length > 0 &&
+            !activeTools.has(event.toolCallId)
+          ) {
+            activeTools.set(event.toolCallId, {
+              name: event.toolName,
+              startedAt: now(),
+              update: "",
+            });
+            recordProgress();
             inspectorRun?.toolStart(event.toolCallId, event.toolName, event.args ?? {});
           }
 
           if (event.type === "tool_execution_update" && event.toolCallId) {
-            inspectorRun?.toolUpdate(event.toolCallId, getInspectorText(event.partialResult));
+            const tool = activeTools.get(event.toolCallId);
+            const update = getInspectorText(event.partialResult);
+            const boundedUpdate = update.slice(-8_000);
+            if (tool && boundedUpdate && boundedUpdate !== tool.update) {
+              tool.update = boundedUpdate;
+              recordProgress();
+            }
+            inspectorRun?.toolUpdate(event.toolCallId, update);
           }
 
           if (event.type === "tool_execution_end" && event.toolCallId) {
+            const matchedTool = activeTools.delete(event.toolCallId);
+            if (matchedTool) recordProgress();
             inspectorRun?.toolEnd(
               event.toolCallId,
               getInspectorText(event.result),
@@ -632,13 +1004,29 @@ async function runSingleAgent({
             );
           }
 
-          if (event.type === "message_end" && event.message) {
+          if (event.type === "message_end") {
+            const messageKey = getMessageLifecycleKey(event.message);
+            const startedCount = messageKey ? (startedMessages.get(messageKey) ?? 0) : 0;
+            if (!messageKey || startedCount === 0) return;
+            if (startedCount === 1) startedMessages.delete(messageKey);
+            else startedMessages.set(messageKey, startedCount - 1);
+
             const msg = event.message as Message;
+            captureDispatch(msg);
+            recordProgress();
             captureNestedUsage(msg);
             currentResult.messages.push(msg);
 
             if (msg.role === "assistant") {
               inspectorRun?.messageEnd(getInspectorMessageText(msg));
+              if (
+                typeof msg.responseModel === "string" &&
+                msg.responseModel &&
+                !modelProvenance.response.includes(msg.responseModel)
+              ) {
+                modelProvenance.response.push(msg.responseModel);
+                inspectorRun?.setModelProvenance(modelProvenance);
+              }
               currentResult.usage.turns++;
               const usage = msg.usage;
               if (usage) {
@@ -660,42 +1048,114 @@ async function runSingleAgent({
           }
         };
 
+        const consumeStdout = (text: string) => {
+          let offset = 0;
+          while (offset < text.length) {
+            const newline = text.indexOf("\n", offset);
+            const end = newline === -1 ? text.length : newline;
+            if (!discardingLine) {
+              if (buffer.length + end - offset > 1024 * 1024) {
+                buffer = "";
+                discardingLine = true;
+                stdoutTruncated = true;
+              } else {
+                buffer += text.slice(offset, end);
+              }
+            }
+            if (newline === -1) break;
+            if (!discardingLine) processLine(buffer);
+            buffer = "";
+            discardingLine = false;
+            offset = newline + 1;
+          }
+        };
         proc.stdout.on("data", (data) => {
-          buffer += data.toString();
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) processLine(line);
+          if (closed) return;
+          consumeStdout(typeof data === "string" ? data : stdoutDecoder.write(data));
         });
 
+        const consumeStderr = (text: string) => {
+          modelErrorMatcher.consume(text);
+          if (stderrTruncated) return;
+          const remaining = 64 * 1024 - currentResult.stderr.length;
+          if (text.length <= remaining) {
+            currentResult.stderr += text;
+            return;
+          }
+          let prefix = text.slice(0, remaining);
+          if (prefix.length > 0 && /[\uD800-\uDBFF]/.test(prefix[prefix.length - 1])) {
+            prefix = prefix.slice(0, -1);
+          }
+          currentResult.stderr += prefix;
+          stderrTruncated = true;
+        };
         proc.stderr.on("data", (data) => {
-          currentResult.stderr += data.toString();
+          if (!closed) {
+            consumeStderr(typeof data === "string" ? data : stderrDecoder.write(data));
+          }
+        });
+
+        const finish = (exitCode: number) => {
+          if (closed) return;
+          closed = true;
+          if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
+          if (escalationTimer !== undefined) clearTimeout(escalationTimer);
+          if (boundedCloseTimer !== undefined) clearTimeout(boundedCloseTimer);
+          cleanupAbort();
+          consumeStderr(stderrDecoder.end());
+          if (stderrTruncated) currentResult.stderr += "\n[stderr truncated]";
+          if (stdoutTruncated) currentResult.stderr += "\n[stdout line truncated]";
+          resolve(exitCode);
+        };
+        finishRun = finish;
+
+        proc.on("exit", () => {
+          directChildExited = true;
         });
 
         proc.on("close", (code, signalName) => {
-          closed = true;
-          cleanupAbort();
-          if (buffer.trim()) processLine(buffer);
-          resolve(signalName ? 1 : (code ?? 1));
+          if (closed) return;
+          consumeStdout(stdoutDecoder.end());
+          if (!discardingLine && buffer.trim()) processLine(buffer);
+          finish(signalName ? 1 : (code ?? 1));
         });
 
         proc.on("error", () => {
-          closed = true;
-          cleanupAbort();
-          resolve(1);
+          directChildExited = true;
+          finish(1);
         });
 
         cleanupAbort = installAbortHandler({
           signal: runAbortController.signal,
-          process: proc,
-          isClosed: () => closed,
+          process: {
+            kill: (signalName) => {
+              if (!watchdogTermination) sendCleanupSignal(signalName);
+              return true;
+            },
+          },
+          isClosed: () => closed || !!watchdogTermination,
           onAbort: () => {
+            if (watchdogTermination) return;
             wasAborted = true;
+            if (watchdogTimer !== undefined) clearTimeout(watchdogTimer);
+            boundedCloseTimer = setTimeout(
+              () => finishRun?.(1),
+              WATCHDOG_CLEANUP_GRACE_MS + WATCHDOG_CLOSE_WAIT_MS,
+            );
           },
         });
       });
 
       currentResult.exitCode = exitCode;
-      if (wasAborted) markResultAborted(currentResult);
+      if (watchdogTermination) {
+        currentResult.termination = watchdogTermination;
+        currentResult.exitCode = 1;
+        currentResult.errorMessage = formatWatchdogSummary(watchdogTermination);
+        currentResult.stderr = "";
+      } else if (wasAborted) {
+        currentResult.termination = { kind: "abort", cleanup: "unknown" };
+        markResultAborted(currentResult);
+      }
       return currentResult;
     } finally {
       if (tmpPromptPath)
@@ -735,6 +1195,8 @@ async function runSingleAgent({
       const result = await runWithModel(model);
       lastResult = result;
 
+      if (result.termination?.kind === "watchdog") return mergePreviousUsage(result);
+
       if (runAbortController.signal.aborted) {
         markResultAborted(result);
         return mergePreviousUsage(result);
@@ -746,7 +1208,7 @@ async function runSingleAgent({
       }
 
       // Check if this is a model/API key error that warrants a fallback
-      const shouldFallback = isModelOrApiKeyError(result.stderr) && i < modelsToTry.length - 1;
+      const shouldFallback = modelErrorMatcher.matches() && i < modelsToTry.length - 1;
       if (!shouldFallback) {
         // No more fallbacks or error is not model-related
         return mergePreviousUsage(result);
@@ -767,12 +1229,17 @@ async function runSingleAgent({
     signal?.removeEventListener("abort", forwardAbort);
     if (inspectorRun?.status() === "running") {
       const status =
-        lastResult?.stopReason === "aborted"
-          ? "aborted"
-          : lastResult && isCompletedResult(lastResult)
-            ? "completed"
-            : "failed";
-      inspectorRun.finish(status);
+        lastResult?.termination?.kind === "watchdog"
+          ? "timed out"
+          : lastResult?.stopReason === "aborted"
+            ? "aborted"
+            : lastResult && isCompletedResult(lastResult)
+              ? "completed"
+              : "failed";
+      inspectorRun.finish(
+        status,
+        lastResult?.termination?.kind === "abort" ? "unknown" : undefined,
+      );
     }
   }
 }
@@ -790,7 +1257,37 @@ const ModelInput = Type.String({
     "Model as provider/id, or 'inherit' for the parent model. Overrides settings and frontmatter.",
 });
 
+const ModelFallbackInput = StringEnum(["configured", "none"] as const);
+
+const WatchdogLimit = Type.Union([
+  Type.Integer({ minimum: 1, maximum: MAX_WATCHDOG_SECONDS }),
+  Type.Null(),
+]);
+const WatchdogInput = Type.Object({
+  idleSeconds: Type.Optional(WatchdogLimit),
+  toolSeconds: Type.Optional(WatchdogLimit),
+  taskSeconds: Type.Optional(WatchdogLimit),
+});
+
+function resolveWatchdog(override?: Partial<WatchdogConfig>): WatchdogConfig {
+  return {
+    idleSeconds:
+      override && "idleSeconds" in override
+        ? (override.idleSeconds ?? null)
+        : DEFAULT_WATCHDOG.idleSeconds,
+    toolSeconds:
+      override && "toolSeconds" in override
+        ? (override.toolSeconds ?? null)
+        : DEFAULT_WATCHDOG.toolSeconds,
+    taskSeconds:
+      override && "taskSeconds" in override
+        ? (override.taskSeconds ?? null)
+        : DEFAULT_WATCHDOG.taskSeconds,
+  };
+}
+
 const TaskItem = Type.Object({
+  modelFallback: Type.Optional(ModelFallbackInput),
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
   subagent_type: Type.Optional(
     Type.String({
@@ -802,9 +1299,11 @@ const TaskItem = Type.Object({
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
   model: Type.Optional(ModelInput),
   thinking: Type.Optional(ThinkingInput),
+  watchdog: Type.Optional(WatchdogInput),
 });
 
 const ChainItem = Type.Object({
+  modelFallback: Type.Optional(ModelFallbackInput),
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke" })),
   subagent_type: Type.Optional(
     Type.String({
@@ -818,6 +1317,7 @@ const ChainItem = Type.Object({
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
   model: Type.Optional(ModelInput),
   thinking: Type.Optional(ThinkingInput),
+  watchdog: Type.Optional(WatchdogInput),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -840,7 +1340,21 @@ const SubagentParams = Type.Object({
   ),
   task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
   model: Type.Optional(ModelInput),
+  modelFallback: Type.Optional(ModelFallbackInput),
   thinking: Type.Optional(ThinkingInput),
+  watchdog: Type.Optional(
+    Type.Object(
+      {
+        idleSeconds: Type.Optional(WatchdogLimit),
+        toolSeconds: Type.Optional(WatchdogLimit),
+        taskSeconds: Type.Optional(WatchdogLimit),
+      },
+      {
+        description:
+          "Watchdog deadlines in seconds. Defaults: idle 300, tool 600, task 1800. Set a field to null to disable it.",
+      },
+    ),
+  ),
   tasks: Type.Optional(
     Type.Array(TaskItem, {
       description: "Array of {agent, task} for parallel execution",
@@ -924,6 +1438,7 @@ export default function (pi: ExtensionAPI) {
       "Model priority: input model > settings override > agent frontmatter > main agent model.",
       "Thinking priority: input thinking > settings override > agent frontmatter > main agent thinking.",
       "Use model: 'inherit' and thinking: 'inherit' to select the parent values even when an agent has overrides.",
+      "Watchdog defaults are 300 seconds idle, 600 seconds per tool, and 1800 seconds per run; override individual limits in seconds or set null to disable. Limits apply to single runs and as defaults for parallel or chain items. A timed-out child may have made partial changes; inspect its artifact and worktree. Parallel calls wait for other tasks to finish or time out.",
       "Each task returns a Markdown artifact path. Read the relevant file before continuing.",
       'Default agent scope is "user" (from ~/.pi/agent/agents).',
       'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
@@ -939,6 +1454,59 @@ export default function (pi: ExtensionAPI) {
       const agents = discovery.agents;
       const confirmProjectAgents = params.confirmProjectAgents ?? true;
 
+      const fallbackValues = [
+        params.modelFallback,
+        ...(params.tasks ?? []).map((item) => item.modelFallback),
+        ...(params.chain ?? []).map((item) => item.modelFallback),
+      ];
+      if (
+        fallbackValues.some(
+          (value) => value !== undefined && value !== "configured" && value !== "none",
+        )
+      ) {
+        return {
+          content: [{ type: "text", text: "Model fallback must be 'configured' or 'none'." }],
+          details: {
+            usageVersion: 3,
+            mode: "single",
+            agentScope,
+            projectAgentsDir: discovery.projectAgentsDir,
+            results: [],
+          },
+          isError: true,
+        };
+      }
+
+      const topWatchdog = resolveWatchdog(params.watchdog);
+      const watchdogItems = [...(params.tasks ?? []), ...(params.chain ?? [])];
+      const watchdogValues = [params.watchdog, ...watchdogItems.map((item) => item.watchdog)];
+      const invalidWatchdog = watchdogValues.some(
+        (value) =>
+          value &&
+          Object.values(value).some(
+            (seconds) =>
+              seconds !== null &&
+              (!Number.isInteger(seconds) || seconds < 1 || seconds > MAX_WATCHDOG_SECONDS),
+          ),
+      );
+      if (invalidWatchdog) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Watchdog limits must be positive integer seconds up to ${MAX_WATCHDOG_SECONDS}, or null.`,
+            },
+          ],
+          details: {
+            usageVersion: 3,
+            mode: "single",
+            agentScope,
+            projectAgentsDir: discovery.projectAgentsDir,
+            results: [],
+          },
+          isError: true,
+        };
+      }
       const hasChain = (params.chain?.length ?? 0) > 0;
       const hasTasks = (params.tasks?.length ?? 0) > 0;
       const hasSingle = Boolean((params.agent || params.subagent_type) && params.task);
@@ -1060,6 +1628,38 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
+      const batchItems = hasChain ? params.chain : hasTasks ? params.tasks : undefined;
+      for (const [index, item] of (batchItems ?? []).entries()) {
+        if ((item.modelFallback ?? params.modelFallback) !== "none") continue;
+        const resolution = resolveAgent(agents, item.agent, item.subagent_type);
+        if (resolution.error || !resolution.agent || !resolution.resolvedName) continue;
+        const overrideEntry = getAgentOverride(overrides, resolution.resolvedName);
+        if (getAgentConfigurationError(resolution.agent, overrideEntry) !== undefined) continue;
+        const modelOverride = item.model ?? params.model;
+        const options = resolveAgentOptions(
+          resolution.agent,
+          overrideEntry?.kind === "valid" ? overrideEntry.value : undefined,
+          {
+            modelOverride,
+            parentModel: mainAgentModel,
+            parentThinking: mainAgentThinking,
+            thinkingOverride: item.thinking ?? params.thinking,
+          },
+        );
+        if ((modelOverride === "inherit" && !mainAgentModel) || !options.modelsToTry[0]) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `${hasChain ? "Chain step" : "Task"} ${index + 1}: Strict model selection requires a concrete model; the requested parent model may be unavailable.`,
+              },
+            ],
+            details: makeDetails(requestedMode)([]),
+            isError: true,
+          };
+        }
+      }
+
       if (
         (agentScope === "project" || agentScope === "both") &&
         confirmProjectAgents &&
@@ -1176,10 +1776,12 @@ export default function (pi: ExtensionAPI) {
             makeDetails: makeDetails("chain"),
             overrides,
             modelOverride: step.model ?? params.model, // step.model takes priority, then top-level params.model
+            modelFallback: step.modelFallback ?? params.modelFallback,
             mainAgentModel,
             mainAgentThinking,
             thinkingOverride: step.thinking ?? params.thinking,
             inspector,
+            watchdog: resolveWatchdog({ ...topWatchdog, ...step.watchdog }),
           });
           const previousResultOutput = getFinalOutput(result.messages);
           await persistResultArtifact({
@@ -1319,10 +1921,12 @@ export default function (pi: ExtensionAPI) {
               makeDetails: makeDetails("parallel"),
               overrides,
               modelOverride: t.model ?? params.model, // task.model takes priority, then top-level params.model
+              modelFallback: t.modelFallback ?? params.modelFallback,
               mainAgentModel,
               mainAgentThinking,
               thinkingOverride: t.thinking ?? params.thinking,
               inspector,
+              watchdog: resolveWatchdog({ ...topWatchdog, ...t.watchdog }),
             });
             await persistResultArtifact({
               result,
@@ -1342,6 +1946,7 @@ export default function (pi: ExtensionAPI) {
             agent: r.agent,
             exitCode: r.exitCode,
             stopReason: r.stopReason,
+            termination: r.termination,
             outputPath: r.outputPath!,
           })),
         );
@@ -1366,10 +1971,12 @@ export default function (pi: ExtensionAPI) {
           makeDetails: makeDetails("single"),
           overrides,
           modelOverride: params.model, // top-level model for single mode
+          modelFallback: params.modelFallback,
           mainAgentModel,
           mainAgentThinking,
           thinkingOverride: params.thinking,
           inspector,
+          watchdog: topWatchdog,
         });
         await persistResultArtifact({
           result,

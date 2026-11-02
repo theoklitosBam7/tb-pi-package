@@ -28,6 +28,7 @@
   "scripts": {
     "hooks:setup": "simple-git-hooks",
     "test": "vitest run",
+    "test:integration": "vitest run --testNamePattern \"\\[(process )?integration\\]\"",
     "typecheck": "tsc -p tsconfig.json",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
     "fmt": "oxfmt",
@@ -71,7 +72,7 @@
   "engines": {
     "node": ">=22.22.3"
   },
-  "packageManager": "pnpm@12.14.0",
+  "packageManager": "pnpm@12.16.1",
   "pi": {
     "extensions": [
       "./extensions"

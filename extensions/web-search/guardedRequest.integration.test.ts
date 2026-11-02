@@ -54,7 +54,7 @@ v2ZuZRv0wHwrKcedNmGccEqNjmphym1cCQIj0kSGrAGPO3fytoz87qcIuHMBhQ6Y
 yxVCDqmsL13epGnXDqjLztNO
 -----END PRIVATE KEY-----`;
 
-describe("pinned HTTPS transport", () => {
+describe("[integration] pinned HTTPS transport", () => {
   it("connects to the pinned socket while keeping Host, SNI and certificate hostname checks", async () => {
     const seen: { remoteAddress?: string; host?: string; servername?: string }[] = [];
     const server = createServer({ key, cert }, (request, response) => {

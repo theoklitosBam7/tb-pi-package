@@ -7,6 +7,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "./agents.js";
+import type { ModelProvenance } from "./result.js";
 
 const MAX_COMPLETED_RUNS = 50;
 const MAX_RUN_CHARS = 64_000;
@@ -15,7 +16,7 @@ const MAX_TOOL_ACTIVITIES = 100;
 const TRUNCATION_NOTICE = "[inspector output truncated; older content omitted]";
 const ACTIVITY_NOTICE = "[older tool activity omitted to stay within the inspector budget]";
 
-export type AgentInspectorStatus = "running" | "completed" | "failed" | "aborted";
+export type AgentInspectorStatus = "running" | "completed" | "failed" | "aborted" | "timed out";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -58,8 +59,10 @@ interface AgentInspectorRun {
   agent: string;
   task: string;
   model?: string;
+  modelProvenance?: ModelProvenance;
   thinking?: SubagentThinkingLevel;
   status: AgentInspectorStatus;
+  cleanup?: "unknown";
   text: string;
   responses: InspectorResponse[];
   tools: InspectorTool[];
@@ -68,6 +71,7 @@ interface AgentInspectorRun {
 
 export interface AgentInspectorRunHandle {
   setModel(model: string | undefined): void;
+  setModelProvenance(provenance: ModelProvenance): void;
   setText(text: string): void;
   messageStart(text?: string): void;
   appendText(delta: string): void;
@@ -76,7 +80,7 @@ export interface AgentInspectorRunHandle {
   toolUpdate(id: string, output: string): void;
   toolEnd(id: string, output: string, isError: boolean): void;
   setStopper(stopper: () => void): void;
-  finish(status: Exclude<AgentInspectorStatus, "running">): void;
+  finish(status: Exclude<AgentInspectorStatus, "running">, cleanup?: "unknown"): void;
   status(): AgentInspectorStatus;
 }
 
@@ -194,6 +198,11 @@ export class AgentInspectorStore {
         run.model = model;
         this.notify();
       },
+      setModelProvenance: (provenance) => {
+        if (!isActive()) return;
+        run.modelProvenance = structuredClone(provenance);
+        this.notify();
+      },
       setText: (text) => {
         if (!isActive()) return;
         run.responses = [];
@@ -242,10 +251,11 @@ export class AgentInspectorStore {
         if (!isActive()) return;
         this.stoppers.set(run.id, stopper);
       },
-      finish: (status) => {
+      finish: (status, cleanup) => {
         if (!isActive()) return;
         this.stoppers.delete(run.id);
         run.status = status;
+        run.cleanup = cleanup;
         for (const tool of run.tools) {
           if (tool.status === "running") tool.status = status === "aborted" ? "aborted" : "failed";
         }
@@ -412,6 +422,7 @@ export class AgentInspectorComponent {
       case "completed":
         return "success" as const;
       case "failed":
+      case "timed out":
         return "error" as const;
       case "aborted":
         return "muted" as const;
@@ -423,6 +434,7 @@ export class AgentInspectorComponent {
       running: "⏳",
       completed: "✓",
       failed: "✗",
+      "timed out": "⌛",
       aborted: "■",
     };
     return this.theme.fg(this.statusSlot(status), icons[status]);
@@ -520,7 +532,21 @@ export class AgentInspectorComponent {
 
   private detailLines(run: AgentInspectorRun, width: number): string[] {
     const lines: string[] = [];
-    if (run.model) lines.push(`${this.theme.fg("muted", "Model:")} ${run.model}`);
+    if (run.cleanup) lines.push(this.theme.fg("warning", "Cleanup: unknown"));
+    if (run.modelProvenance) {
+      const provenance = run.modelProvenance;
+      lines.push(`Requested selection: ${provenance.requested ?? "not specified"}`);
+      lines.push(
+        `Resolved selections: ${provenance.resolved.map((model) => model ?? "child default").join(", ") || "none"}`,
+      );
+      lines.push(
+        `Attempted selections: ${provenance.attempted.map((model) => model ?? "child default").join(", ") || "none"}`,
+      );
+      lines.push(`Observed dispatch: ${provenance.dispatch.join(", ") || "unknown"}`);
+      lines.push(
+        `Provider-reported response model: ${provenance.response.join(", ") || "unknown"}`,
+      );
+    } else if (run.model) lines.push(`${this.theme.fg("muted", "Model:")} ${run.model}`);
     lines.push(`${this.theme.fg("muted", "Thinking:")} ${getSubagentThinkingLabel(run.thinking)}`);
     lines.push(this.theme.fg("muted", "Task:"), ...run.task.split("\n"));
     if (run.activityTruncated) lines.push(this.theme.fg("warning", ACTIVITY_NOTICE));

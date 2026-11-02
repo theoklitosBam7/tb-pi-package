@@ -4,5 +4,6 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["extensions/**/*.test.ts"],
+    testNamePattern: /^(?!.*\[(?:process )?integration\])/,
   },
 });

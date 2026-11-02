@@ -10,10 +10,12 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawn: vi.fn() };
+  return { ...actual, realSpawn: actual.spawn, spawn: vi.fn() };
 });
 
 import { ChildProcess, spawn, spawnSync } from "node:child_process";
+import * as childProcess from "node:child_process";
+const realSpawn = (childProcess as typeof childProcess & { realSpawn: typeof spawn }).realSpawn;
 import subagentExtension, { buildSubagentArgs } from "./index.js";
 import {
   buildArtifactPath,
@@ -144,6 +146,24 @@ describe("artifact summaries", () => {
     );
   });
 
+  it("reports cleanup uncertainty in each summary only when recorded", () => {
+    const result = {
+      exitCode: 1,
+      stopReason: "aborted",
+      termination: { kind: "abort", cleanup: "unknown" },
+    } as const;
+    expect(formatSingleSummary(result, "/result.md")).toContain("Cleanup: unknown.");
+    expect(formatChainSummary([{ ...result, outputPath: "/result.md" }])).toContain(
+      "Cleanup: unknown.",
+    );
+    expect(
+      formatParallelSummary([{ ...result, agent: "worker", outputPath: "/result.md" }]),
+    ).toContain("Cleanup: unknown.");
+    expect(formatSingleSummary({ exitCode: 1, stopReason: "aborted" }, "/old.md")).not.toContain(
+      "Cleanup:",
+    );
+  });
+
   it("labels a user-aborted result as aborted in summaries", () => {
     const result = { exitCode: 1, stopReason: "aborted" } as const;
 
@@ -271,6 +291,8 @@ describe("writeResultArtifact", () => {
       const artifact = fs.readFileSync(outputPath, "utf8");
       expect(artifact).toContain("- Status: completed");
       expect(artifact).toContain("- Model: anthropic/claude-sonnet-4-5");
+      expect(artifact).not.toContain("Observed dispatch:");
+      expect(artifact).not.toContain("Provider-reported response model:");
       expect(artifact).toContain("- Thinking: medium");
       expect(artifact).toContain("- Task: parallel item 2");
       expect(artifact).toContain("## Result\n\n# Finding\n\nComplete output.");
@@ -667,11 +689,31 @@ function createPersistenceTestChild() {
   });
 }
 
-function registerPersistenceTestTools(thinkingLevel?: "off" | "xhigh"): Record<string, any> {
+function emitPersistenceTestMessage(
+  child: ReturnType<typeof createPersistenceTestChild>,
+  message: object,
+): void {
+  const startMessage =
+    "role" in message && message.role === "assistant"
+      ? { ...message, content: [], stopReason: "pending" }
+      : message;
+  child.stdout.emit(
+    "data",
+    `${JSON.stringify({ type: "message_start", message: startMessage })}\n`,
+  );
+  child.stdout.emit("data", `${JSON.stringify({ type: "message_end", message })}\n`);
+}
+
+function registerPersistenceTestTools(
+  thinkingLevel?: "off" | "xhigh",
+  events: Record<string, () => void> = {},
+): Record<string, any> {
   const tools: Record<string, any> = {};
   subagentExtension({
     getThinkingLevel: () => thinkingLevel,
-    on() {},
+    on(event: string, handler: () => void) {
+      events[event] = handler;
+    },
     registerTool(tool: any) {
       tools[tool.name] = tool;
     },
@@ -680,6 +722,2423 @@ function registerPersistenceTestTools(thinkingLevel?: "off" | "xhigh"): Record<s
   } as any);
   return tools;
 }
+
+describe("subagent output limits", () => {
+  it("records a provider-reported identity on an error without labeling it as generated output", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-error-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      queueMicrotask(() => {
+        emitPersistenceTestMessage(child, {
+          role: "assistant",
+          content: [],
+          api: "test",
+          provider: "provider",
+          model: "dispatch",
+          responseModel: "reported",
+          stopReason: "error",
+          timestamp: 1,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { total: 0 },
+          },
+        });
+        child.emit("close", 1, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "error",
+        {
+          agent: "worker",
+          task: "test",
+          model: "test/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.details.results[0].modelProvenance.response).toEqual(["reported"]);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("retains changed dispatch identities within a message", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-change-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      queueMicrotask(() => {
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "test",
+          provider: "provider",
+          model: "first",
+          stopReason: "pending",
+          timestamp: 1,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { total: 0 },
+          },
+        };
+        child.stdout.emit("data", `${JSON.stringify({ type: "message_start", message })}\n`);
+        child.stdout.emit(
+          "data",
+          `${JSON.stringify({ type: "message_end", message: { ...message, model: "second", stopReason: "stop" } })}\n`,
+        );
+        child.emit("close", 0, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "changed",
+        {
+          agent: "worker",
+          task: "test",
+          model: "test/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.details.results[0].modelProvenance.dispatch).toEqual([
+        "provider/first",
+        "provider/second",
+      ]);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("retains dispatch identities and attempted selections across retries", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-retry-",
+      "---\nname: worker\ndescription: Test worker\nmodel: fallback/model\n---\n",
+    );
+    let attempt = 0;
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      const current = ++attempt;
+      queueMicrotask(() => {
+        emitPersistenceTestMessage(child, {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "test",
+          provider: "provider",
+          model: current === 1 ? "first" : "second",
+          stopReason: current === 1 ? "error" : "stop",
+          timestamp: current,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { total: 0 },
+          },
+        });
+        if (current === 1) child.stderr.emit("data", "No API key");
+        child.emit("close", current === 1 ? 1 : 0, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "retry",
+        {
+          agent: "worker",
+          task: "test",
+          model: "requested/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.details.results[0].modelProvenance).toEqual({
+        requested: "requested/model",
+        resolved: ["requested/model", "fallback/model"],
+        attempted: ["requested/model", "fallback/model"],
+        dispatch: ["provider/first", "provider/second"],
+        response: [],
+      });
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["timeout", "abort"] as const)(
+    "retains provenance in the %s artifact",
+    async (reason) => {
+      const project = createPersistenceTestProject(
+        "stopped-provenance-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const child = createPersistenceTestChild();
+      child.kill.mockImplementation(() => {
+        queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+        return true;
+      });
+      vi.mocked(spawn).mockImplementation(() => {
+        queueMicrotask(() =>
+          emitPersistenceTestMessage(child, {
+            role: "assistant",
+            content: [{ type: "text", text: "working" }],
+            api: "test",
+            provider: "actual",
+            model: "dispatch",
+            responseModel: "version",
+            stopReason: "stop",
+            timestamp: 1,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { total: 0 },
+            },
+          }),
+        );
+        return child as never;
+      });
+      const controller = new AbortController();
+      const timer = reason === "abort" ? setTimeout(() => controller.abort(), 100) : undefined;
+      try {
+        const result = await registerPersistenceTestTools().agent.execute(
+          "stopped-provenance",
+          {
+            agent: "worker",
+            task: "test",
+            model: "requested/model",
+            modelFallback: "none",
+            agentScope: "project",
+            confirmProjectAgents: false,
+            watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+          },
+          controller.signal,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        const item = result.details.results[0];
+        expect(item.modelProvenance).toMatchObject({
+          attempted: ["requested/model"],
+          dispatch: ["actual/dispatch"],
+          response: ["version"],
+        });
+        const artifact = fs.readFileSync(item.outputPath, "utf8");
+        expect(artifact).toContain("Observed dispatch: actual/dispatch");
+        expect(artifact).toContain("Provider-reported response model: version");
+        expect(item.termination.kind).toBe(reason === "timeout" ? "watchdog" : "abort");
+      } finally {
+        if (timer) clearTimeout(timer);
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("reports unknown dispatch when a child fails before emitting model events", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-startup-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      queueMicrotask(() => {
+        child.stderr.emit("data", "startup failed");
+        child.emit("close", 1, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "startup",
+        {
+          agent: "worker",
+          task: "test",
+          model: "test/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      const item = result.details.results[0];
+      expect(item.modelProvenance).toEqual({
+        requested: "test/model",
+        resolved: ["test/model"],
+        attempted: ["test/model"],
+        dispatch: [],
+        response: [],
+      });
+      const artifact = fs.readFileSync(item.outputPath, "utf8");
+      expect(artifact).toContain("Observed dispatch: unknown");
+      expect(artifact).toContain("Provider-reported response model: unknown");
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("persists requested, attempted, dispatch and provider response model evidence separately", async () => {
+    const project = createPersistenceTestProject(
+      "provenance-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      queueMicrotask(() => {
+        emitPersistenceTestMessage(child, {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          api: "test",
+          provider: "actual",
+          model: "dispatch",
+          responseModel: "provider-version",
+          stopReason: "stop",
+          timestamp: 1,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { total: 0 },
+          },
+        });
+        child.emit("close", 0, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "provenance",
+        {
+          agent: "worker",
+          task: "test",
+          model: "requested/model",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      const item = result.details.results[0];
+      expect(item.modelProvenance).toEqual({
+        requested: "requested/model",
+        resolved: ["requested/model"],
+        attempted: ["requested/model"],
+        dispatch: ["actual/dispatch"],
+        response: ["provider-version"],
+      });
+      const artifact = fs.readFileSync(item.outputPath, "utf8");
+      expect(artifact).toContain("Observed dispatch: actual/dispatch");
+      expect(artifact).toContain("Provider-reported response model: provider-version");
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+  it.each(["tasks", "chain"] as const)(
+    "allows a %s item to override strict policy and thinking",
+    async (mode) => {
+      const project = createPersistenceTestProject(
+        "item-policy-",
+        "---\nname: worker\ndescription: Test worker\nmodel: fallback/model\nthinking: high\n---\n",
+      );
+      let attempts = 0;
+      vi.mocked(spawn).mockImplementation(() => {
+        const child = createPersistenceTestChild();
+        const current = ++attempts;
+        queueMicrotask(() => {
+          if (current === 1) child.stderr.emit("data", "No API key");
+          child.emit("close", current === 1 ? 1 : 0, null);
+        });
+        return child as never;
+      });
+      try {
+        const result = await registerPersistenceTestTools("xhigh").agent.execute(
+          "item-policy",
+          {
+            [mode]: [
+              { agent: "worker", task: "test", modelFallback: "configured", thinking: "inherit" },
+            ],
+            model: "primary/model",
+            modelFallback: "none",
+            thinking: "off",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            model: { provider: "parent", id: "model" },
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        expect(result.details.results[0]).toMatchObject({
+          thinking: "xhigh",
+          modelProvenance: { attempted: ["primary/model", "fallback/model"] },
+        });
+      } finally {
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["tasks", "chain"] as const)(
+    "preflights a %s item with no concrete model",
+    async (mode) => {
+      const project = createPersistenceTestProject(
+        "strict-no-model-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      try {
+        const result = await registerPersistenceTestTools().agent.execute(
+          "no-model",
+          {
+            [mode]: [
+              { agent: "worker", task: "first", model: "valid/model" },
+              { agent: "worker", task: "second" },
+            ],
+            modelFallback: "none",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        expect(result.isError).toBe(true);
+        expect(spawn).not.toHaveBeenCalled();
+      } finally {
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["tasks", "chain"] as const)(
+    "preflights all strict %s items before spawning",
+    async (mode) => {
+      const project = createPersistenceTestProject(
+        "strict-batch-preflight-",
+        "---\nname: worker\ndescription: Test worker\nmodel: fallback/model\n---\n",
+      );
+      try {
+        const result = await registerPersistenceTestTools().agent.execute(
+          "strict-batch-preflight",
+          {
+            [mode]: [
+              { agent: "worker", task: "first", model: "valid/model" },
+              { agent: "worker", task: "second", model: "inherit" },
+            ],
+            modelFallback: "none",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        expect(result.isError).toBe(true);
+        expect(spawn).not.toHaveBeenCalled();
+      } finally {
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("rejects strict inherit without a parent model before spawning", async () => {
+    const project = createPersistenceTestProject(
+      "strict-inherit-missing-",
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "strict-inherit-missing",
+        {
+          agent: "worker",
+          task: "test",
+          model: "inherit",
+          modelFallback: "none",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("applies the top-level strict fallback policy to parallel tasks", async () => {
+    const project = createPersistenceTestProject(
+      "parallel-strict-",
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    let attempts = 0;
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      attempts++;
+      queueMicrotask(() => {
+        child.stderr.emit("data", "No API key");
+        child.emit("close", 1, null);
+      });
+      return child as never;
+    });
+    try {
+      await registerPersistenceTestTools().agent.execute(
+        "parallel-strict",
+        {
+          tasks: [{ agent: "worker", task: "test", model: "test/primary" }],
+          modelFallback: "none",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(attempts).toBe(1);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("does not retry a model error when model fallback is none", async () => {
+    const project = createPersistenceTestProject(
+      "strict-fallback-",
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    let attempts = 0;
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      attempts++;
+      queueMicrotask(() => {
+        child.stderr.emit("data", "No API key");
+        child.emit("close", 1, null);
+      });
+      return child as never;
+    });
+    try {
+      await registerPersistenceTestTools().agent.execute(
+        "strict-fallback",
+        {
+          agent: "worker",
+          task: "test",
+          model: "test/primary",
+          modelFallback: "none",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(attempts).toBe(1);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { chunks: ["No API key"], attempts: 2 },
+    { chunks: ["No AP", "I key"], attempts: 2 },
+    { chunks: ["model", "x".repeat(70_000), "not avail", "able"], attempts: 2 },
+    { chunks: ["provider", "x".repeat(70_000), "er", "ror"], attempts: 2 },
+    { chunks: ["model", "x".repeat(70_000), "error"], attempts: 1 },
+    { chunks: ["provider", "x".repeat(70_000), "not found"], attempts: 1 },
+  ])(
+    "matches late stderr terms across chunks: $chunks",
+    async ({ chunks, attempts: expectedAttempts }) => {
+      const project = createPersistenceTestProject(
+        "late-fallback-",
+        "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+      );
+      let attempts = 0;
+      vi.mocked(spawn).mockImplementation(() => {
+        const child = createPersistenceTestChild();
+        attempts++;
+        queueMicrotask(() => {
+          if (attempts === 1) {
+            child.stderr.emit("data", "x".repeat(70_000));
+            for (const chunk of chunks) child.stderr.emit("data", chunk);
+            child.emit("close", 1, null);
+          } else {
+            child.emit("close", 0, null);
+          }
+        });
+        return child as never;
+      });
+      try {
+        await registerPersistenceTestTools().agent.execute(
+          "late-fallback",
+          {
+            agent: "worker",
+            task: "test",
+            model: "test/primary",
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        expect(attempts).toBe(expectedAttempts);
+      } finally {
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([false, true])("bounds noisy stderr and hides it on timeout: %s", async (timeout) => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "stderr-limit-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    try {
+      const execution = registerPersistenceTestTools().agent.execute(
+        "stderr-limit",
+        {
+          agent: "worker",
+          task: "test",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      child.stderr.emit("data", "secret-diagnostic " + "x".repeat(1024 * 1024));
+      child.stderr.emit("data", "y".repeat(1024 * 1024));
+      if (timeout) await vi.advanceTimersByTimeAsync(1_000);
+      else child.emit("close", 1, null);
+      const result = await execution;
+      const stderr = result.details.results[0].stderr;
+      expect(stderr.length).toBeLessThan(100_000);
+      if (timeout) expect(JSON.stringify(result)).not.toContain("secret-diagnostic");
+      else {
+        expect(stderr).toContain("secret-diagnostic");
+        expect(stderr).toContain("[stderr truncated]");
+      }
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("discards an oversized stdout line and recovers at the next JSONL event", async () => {
+    const project = createPersistenceTestProject(
+      "stdout-limit-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    vi.mocked(spawn).mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.emit("data", "x".repeat(1024 * 1024));
+        child.stdout.emit("data", "x".repeat(1024 * 1024));
+        child.stdout.emit("data", "end\n");
+        const message = {
+          role: "assistant",
+          content: [{ type: "text", text: "recovered 😀" }],
+          stopReason: "stop",
+          timestamp: 1,
+          api: "test",
+          provider: "test",
+          model: "test",
+        };
+        const events = Buffer.from(
+          `${JSON.stringify({ type: "message_start", message })}\n${JSON.stringify({ type: "message_end", message })}\n`,
+        );
+        const split = events.indexOf(Buffer.from("😀")) + 1;
+        child.stdout.emit("data", events.subarray(0, split));
+        child.stdout.emit("data", events.subarray(split));
+        child.emit("close", 0, null);
+      });
+      return child as never;
+    });
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "stdout-limit",
+        { agent: "worker", task: "test", agentScope: "project", confirmProjectAgents: false },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.details.results[0].usage.turns).toBe(1);
+      expect(fs.readFileSync(result.details.results[0].outputPath, "utf8")).toContain(
+        "recovered 😀",
+      );
+      expect(result.details.results[0].stderr).toContain("[stdout line truncated]");
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("subagent watchdog", () => {
+  it("uses task precedence when task, tool, and idle deadlines expire together", async () => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-simultaneous-deadlines-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const execution = tools.agent.execute(
+        "call-watchdog-simultaneous-deadlines",
+        {
+          agent: "worker",
+          task: "Expire all three deadlines together",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: 1, taskSeconds: 1 },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({ type: "tool_execution_start", toolCallId: "same-time", toolName: "read" })}\n`,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const result = await execution;
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "task",
+        activeTool: "read",
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("uses tool precedence when tool and idle deadlines expire together", async () => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-tool-idle-deadlines-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const execution = tools.agent.execute(
+        "call-watchdog-tool-idle-deadlines",
+        {
+          agent: "worker",
+          task: "Expire tool and idle deadlines together",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: 1, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({ type: "tool_execution_start", toolCallId: "same-time", toolName: "read" })}\n`,
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const result = await execution;
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "tool",
+        activeTool: "read",
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["close callback runs first", true],
+    ["watchdog callback runs first", false],
+  ] as const)("handles completion exactly at the deadline when %s", async (_name, closeFirst) => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-exact-deadline-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockImplementation(() => {
+      if (closeFirst) setTimeout(() => child.emit("close", 0, null), 1_000);
+      else queueMicrotask(() => setTimeout(() => child.emit("close", 0, null), 1_000));
+      return child as never;
+    });
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const execution = tools.agent.execute(
+        `call-watchdog-exact-deadline-${closeFirst}`,
+        {
+          agent: "worker",
+          task: "Complete exactly at the idle deadline",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (!closeFirst) await vi.advanceTimersByTimeAsync(6_000);
+      const result = await execution;
+
+      if (closeFirst) {
+        expect(result.details.results[0].termination).toBeUndefined();
+        expect(child.kill).not.toHaveBeenCalled();
+      } else {
+        expect(result.details.results[0].termination).toMatchObject({
+          kind: "watchdog",
+          deadline: "idle",
+        });
+        expect(child.kill).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      vi.useRealTimers();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a child close just before the deadline as completion, not timeout", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-close-race-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const closeTimer = setTimeout(() => child.emit("close", 0, null), 700);
+
+    try {
+      const result = await tools.agent.execute(
+        "call-watchdog-close-race",
+        {
+          agent: "worker",
+          task: "Complete before the deadline",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(result.details.results[0].termination).toBeUndefined();
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      clearTimeout(closeTimer);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "[process integration] bounds cleanup and stops a real child process group on timeout",
+    async () => {
+      const project = createPersistenceTestProject(
+        "watchdog-process-group-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const fixturePath = path.join(project, "fixture.cjs");
+      const readyPath = path.join(project, "ready");
+      const signalPath = path.join(project, "signal");
+      fs.writeFileSync(
+        fixturePath,
+        `const { spawn } = require("node:child_process");\n` +
+          `const fs = require("node:fs");\n` +
+          `const child = spawn(process.execPath, ["-e", ` +
+          `${JSON.stringify(`const fs = require("node:fs"); process.on("SIGTERM", () => { fs.writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM"); process.exit(0); }); fs.writeFileSync(${JSON.stringify(readyPath)}, "ready"); setTimeout(() => process.exit(0), 8000);`)}], ` +
+          `{ stdio: "ignore" });\n` +
+          `process.on("SIGTERM", () => {});\n` +
+          `setTimeout(() => process.exit(0), 8000);\n`,
+      );
+      let leader: ReturnType<typeof realSpawn> | undefined;
+      vi.mocked(spawn).mockImplementation((_command, _args, options) => {
+        leader = realSpawn(process.execPath, [fixturePath], options);
+        return leader as never;
+      });
+      const tools = registerPersistenceTestTools();
+      const startedAt = Date.now();
+
+      try {
+        const execution = tools.agent.execute(
+          "call-watchdog-process-group",
+          {
+            agent: "worker",
+            task: "Run the subprocess fixture",
+            agentScope: "project",
+            confirmProjectAgents: false,
+            watchdog: { idleSeconds: 2, toolSeconds: null, taskSeconds: null },
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        await vi.waitFor(() => expect(fs.existsSync(readyPath)).toBe(true));
+        const result = await execution;
+
+        expect(result.isError).toBe(true);
+        expect(Date.now() - startedAt).toBeLessThan(8_000);
+        expect(result.details.results[0].termination).toMatchObject({
+          kind: "watchdog",
+          cleanup: "unknown",
+        });
+        await vi.waitFor(() => expect(fs.readFileSync(signalPath, "utf8")).toBe("SIGTERM"));
+      } finally {
+        if (leader && leader.exitCode === null && leader.signalCode === null)
+          leader.kill("SIGKILL");
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+    10_000,
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "[process integration] escalates to kill a real descendant that ignores SIGTERM",
+    async () => {
+      const project = createPersistenceTestProject(
+        "watchdog-group-escalation-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const fixturePath = path.join(project, "fixture.cjs");
+      const readyPath = path.join(project, "ready");
+      const signalPath = path.join(project, "signal");
+      const descendant = `const fs = require("node:fs");
+process.on("SIGTERM", () => fs.writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM"));
+fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");
+setTimeout(() => process.exit(0), 12000);`;
+      fs.writeFileSync(
+        fixturePath,
+        `const { spawn } = require("node:child_process");
+process.on("SIGTERM", () => {});
+spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "inherit", "ignore"] });
+setTimeout(() => process.exit(0), 12000);`,
+      );
+      let leader: ReturnType<typeof realSpawn> | undefined;
+      let groupClosed: Promise<void> | undefined;
+      vi.mocked(spawn).mockImplementation((_command, _args, options) => {
+        leader = realSpawn(process.execPath, [fixturePath], options);
+        groupClosed = new Promise((resolve) => leader?.once("close", () => resolve()));
+        return leader as never;
+      });
+      const tools = registerPersistenceTestTools();
+      const startedAt = Date.now();
+
+      try {
+        const execution = tools.agent.execute(
+          "call-watchdog-group-escalation",
+          {
+            agent: "worker",
+            task: "Run the subprocess fixture",
+            agentScope: "project",
+            confirmProjectAgents: false,
+            watchdog: { idleSeconds: 2, toolSeconds: null, taskSeconds: null },
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        await vi.waitFor(() => expect(fs.existsSync(readyPath)).toBe(true));
+        const result = await execution;
+        expect(result.details.results[0].termination).toMatchObject({ kind: "watchdog" });
+        expect(fs.readFileSync(signalPath, "utf8")).toBe("SIGTERM");
+        await groupClosed;
+        expect(leader?.signalCode).toBe("SIGKILL");
+        expect(Date.now() - startedAt).toBeLessThan(10_000);
+      } finally {
+        if (leader && leader.exitCode === null && leader.signalCode === null)
+          leader.kill("SIGKILL");
+        await groupClosed;
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+    16_000,
+  );
+
+  it("does not signal a process group after its leader exits and keeps cleanup unknown", async () => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-exited-leader-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = Object.assign(createPersistenceTestChild(), { pid: 45_678 });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const processKill = vi.spyOn(process, "kill").mockReturnValue(true);
+    const tools = registerPersistenceTestTools();
+    const exitTimer = setTimeout(() => child.emit("exit", 0, null), 100);
+
+    try {
+      const execution = tools.agent.execute(
+        "call-watchdog-exited-leader",
+        {
+          agent: "worker",
+          task: "Time out after the direct child has exited",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(7_000);
+      const result = await execution;
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "idle",
+        cleanup: "unknown",
+      });
+      expect(processKill).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      clearTimeout(exitTimer);
+      processKill.mockRestore();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 8_000);
+
+  it.each([
+    { modelFallback: "invalid", tasks: [{ agent: "worker", task: "test" }] },
+    { tasks: [{ agent: "worker", task: "test", modelFallback: "invalid" }] },
+    { chain: [{ agent: "worker", task: "test", modelFallback: "invalid" }] },
+  ])("rejects invalid fallback policies before spawning: %j", async (input) => {
+    const project = createPersistenceTestProject(
+      "invalid-fallback-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "invalid-fallback",
+        { ...input, agentScope: "project", confirmProjectAgents: false },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid watchdog limits before spawning a child", async () => {
+    const project = createPersistenceTestProject(
+      "invalid-watchdog-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const tools = registerPersistenceTestTools();
+    try {
+      const result = await tools.agent.execute(
+        "call-invalid-watchdog",
+        {
+          agent: "worker",
+          task: "must not start",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 0 },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("positive integer seconds");
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("returns an aborted result without spawning or cleanup when already aborted", async () => {
+    const project = createPersistenceTestProject(
+      "already-aborted-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const processKill = vi.spyOn(process, "kill");
+    const controller = new AbortController();
+    controller.abort();
+    const tools = registerPersistenceTestTools();
+    try {
+      const result = await tools.agent.execute(
+        "call-already-aborted",
+        {
+          agent: "worker",
+          task: "Do not start",
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        controller.signal,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(spawn).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(processKill).not.toHaveBeenCalled();
+      expect(result.details.results[0].stopReason).toBe("aborted");
+      expect(result.details.results[0].termination).toBeUndefined();
+      expect(result.content[0].text).not.toContain("Cleanup: unknown");
+      expect(fs.readFileSync(result.details.results[0].outputPath!, "utf8")).not.toContain(
+        "Cleanup: unknown",
+      );
+    } finally {
+      processKill.mockRestore();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "signals the dedicated group when the parent aborts",
+    async () => {
+      const project = createPersistenceTestProject(
+        "abort-process-group-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const child = Object.assign(createPersistenceTestChild(), { pid: 45_678 });
+      child.kill.mockImplementation(() => {
+        queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+        return true;
+      });
+      vi.mocked(spawn).mockReturnValue(child as never);
+      const processKill = vi.spyOn(process, "kill").mockImplementation(() => {
+        queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+        return true;
+      });
+      const controller = new AbortController();
+      const tools = registerPersistenceTestTools();
+      try {
+        const execution = tools.agent.execute(
+          "call-abort-group",
+          { agent: "worker", task: "Abort", agentScope: "project", confirmProjectAgents: false },
+          controller.signal,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+        controller.abort();
+        const result = await execution;
+        expect(processKill).toHaveBeenCalledWith(-45_678, "SIGTERM");
+        expect(result.details.results[0].stopReason).toBe("aborted");
+        expect(result.details.results[0].termination).toEqual({
+          kind: "abort",
+          cleanup: "unknown",
+        });
+        expect(result.content[0].text).toContain("Cleanup: unknown");
+        expect(fs.readFileSync(result.details.results[0].outputPath!, "utf8")).toContain(
+          "Cleanup: unknown",
+        );
+      } finally {
+        processKill.mockRestore();
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "[process integration] stops a real child and descendant when the parent aborts",
+    async () => {
+      const project = createPersistenceTestProject(
+        "abort-real-group-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const fixturePath = path.join(project, "fixture.cjs");
+      const readyPath = path.join(project, "ready");
+      const signalPath = path.join(project, "signal");
+      fs.writeFileSync(
+        fixturePath,
+        `const { spawn } = require("node:child_process");\n` +
+          `spawn(process.execPath, ["-e", ${JSON.stringify(`const fs = require("node:fs"); process.on("SIGTERM", () => { fs.writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM"); process.exit(0); }); fs.writeFileSync(${JSON.stringify(readyPath)}, "ready"); setTimeout(() => process.exit(0), 8000);`)}], { stdio: "ignore" });\n` +
+          `process.on("SIGTERM", () => {});\n` +
+          `setTimeout(() => process.exit(0), 8000);\n`,
+      );
+      let leader: ReturnType<typeof realSpawn> | undefined;
+      vi.mocked(spawn).mockImplementation((_command, _args, options) => {
+        leader = realSpawn(process.execPath, [fixturePath], options);
+        return leader as never;
+      });
+      const controller = new AbortController();
+      const tools = registerPersistenceTestTools();
+      try {
+        const execution = tools.agent.execute(
+          "call-abort-real-group",
+          { agent: "worker", task: "Abort", agentScope: "project", confirmProjectAgents: false },
+          controller.signal,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        await vi.waitFor(() => expect(fs.existsSync(readyPath)).toBe(true));
+        controller.abort();
+        const result = await execution;
+        expect(result.details.results[0].stopReason).toBe("aborted");
+        await vi.waitFor(() => expect(fs.readFileSync(signalPath, "utf8")).toBe("SIGTERM"));
+      } finally {
+        controller.abort();
+        if (leader && leader.exitCode === null && leader.signalCode === null)
+          leader.kill("SIGKILL");
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+    10_000,
+  );
+
+  it("returns an aborted result when the parent aborts before the watchdog deadline and the child stays open", async () => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-abort-race-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 100);
+
+    try {
+      const startedAt = Date.now();
+      const execution = tools.agent.execute(
+        "call-watchdog-abort-race",
+        {
+          agent: "worker",
+          task: "Abort before the idle deadline",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        controller.signal,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(6_100);
+      const result = await execution;
+
+      expect(Date.now() - startedAt).toBeLessThan(8_000);
+      expect(result.details.results[0].stopReason).toBe("aborted");
+      expect(result.details.results[0].termination).toEqual({ kind: "abort", cleanup: "unknown" });
+    } finally {
+      vi.useRealTimers();
+      clearTimeout(abortTimer);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 9_000);
+
+  it.runIf(process.platform !== "win32")(
+    "keeps the timeout result and bounds cleanup when signals fail and abort arrives later",
+    async () => {
+      vi.useFakeTimers();
+      const project = createPersistenceTestProject(
+        "watchdog-signal-failure-",
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const child = Object.assign(createPersistenceTestChild(), { pid: 45_678 });
+      child.kill.mockImplementation(() => {
+        throw new Error("signal rejected");
+      });
+      vi.mocked(spawn).mockReturnValue(child as never);
+      const processKill = vi.spyOn(process, "kill").mockImplementation(() => {
+        throw new Error("signal rejected");
+      });
+      const controller = new AbortController();
+      const abortTimer = setTimeout(() => controller.abort(), 1500);
+      const tools = registerPersistenceTestTools();
+      const startedAt = Date.now();
+      try {
+        const execution = tools.agent.execute(
+          "call-watchdog-signal-failure",
+          {
+            agent: "worker",
+            task: "Timeout before abort",
+            agentScope: "project",
+            confirmProjectAgents: false,
+            watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+          },
+          controller.signal,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(7_000);
+        const result = await execution;
+
+        expect(Date.now() - startedAt).toBeLessThan(8_000);
+        expect(result.details.results[0].termination).toMatchObject({
+          kind: "watchdog",
+          deadline: "idle",
+          cleanup: "unknown",
+        });
+        expect(processKill).toHaveBeenCalledWith(-45_678, "SIGTERM");
+        expect(processKill).toHaveBeenCalledWith(-45_678, "SIGKILL");
+        expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+        expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      } finally {
+        vi.useRealTimers();
+        clearTimeout(abortTimer);
+        processKill.mockRestore();
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+    9_000,
+  );
+
+  it("enforces the tool deadline while assistant text continues to stream", async () => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-tool-deadline-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const emitText = () =>
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({
+          type: "message_update",
+          assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "working" },
+        })}\n`,
+      );
+    const eventTimers = [
+      setTimeout(
+        () =>
+          child.stdout.emit(
+            "data",
+            `${JSON.stringify({ type: "tool_execution_start", toolCallId: "long-tool", toolName: "read" })}\n`,
+          ),
+        100,
+      ),
+      ...[300, 500, 700, 900, 1_100].map((delay) => setTimeout(emitText, delay)),
+    ];
+
+    try {
+      const resultPromise = tools.agent.execute(
+        "call-watchdog-tool-deadline",
+        {
+          agent: "worker",
+          task: "Keep producing assistant output inside a long tool call",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: null, toolSeconds: 1, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_100);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const result = await resultPromise;
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "tool",
+        activeTool: "read",
+      });
+    } finally {
+      for (const timer of eventTimers) clearTimeout(timer);
+      vi.useRealTimers();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("enforces the task deadline while assistant text continues to stream", async () => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-task-deadline-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const progressTimer = setInterval(
+      () =>
+        child.stdout.emit(
+          "data",
+          `${JSON.stringify({
+            type: "message_update",
+            assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "working" },
+          })}\n`,
+        ),
+      200,
+    );
+
+    try {
+      const execution = tools.agent.execute(
+        "call-watchdog-task-deadline",
+        {
+          agent: "worker",
+          task: "Keep producing assistant output beyond the run deadline",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: null, toolSeconds: null, taskSeconds: 1 },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(6_000);
+      const result = await execution;
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "task",
+      });
+    } finally {
+      clearInterval(progressTimer);
+      vi.useRealTimers();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it.each(["parallel", "chain"] as const)(
+    "applies an item watchdog override in %s mode",
+    async (mode) => {
+      vi.useFakeTimers();
+      const project = createPersistenceTestProject(
+        `watchdog-item-override-${mode}-`,
+        "---\nname: worker\ndescription: Test worker\n---\n",
+      );
+      const child = createPersistenceTestChild();
+      child.kill.mockImplementation(() => {
+        queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+        return true;
+      });
+      vi.mocked(spawn).mockReturnValue(child as never);
+      const tools = registerPersistenceTestTools();
+      const progressTimer = setInterval(
+        () =>
+          child.stdout.emit(
+            "data",
+            `${JSON.stringify({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "working" },
+            })}\n`,
+          ),
+        200,
+      );
+
+      try {
+        const execution = tools.agent.execute(
+          `call-watchdog-item-override-${mode}`,
+          {
+            [mode === "parallel" ? "tasks" : "chain"]: [
+              { agent: "worker", task: "Use the item task deadline", watchdog: { taskSeconds: 1 } },
+            ],
+            watchdog: { idleSeconds: null, toolSeconds: null, taskSeconds: null },
+            agentScope: "project",
+            confirmProjectAgents: false,
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+          },
+        );
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(6_000);
+        const result = await execution;
+        expect(result.details.results[0].termination).toMatchObject({
+          kind: "watchdog",
+          deadline: "task",
+        });
+      } finally {
+        clearInterval(progressTimer);
+        vi.useRealTimers();
+        vi.mocked(spawn).mockReset();
+        vi.unstubAllEnvs();
+        fs.rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("treats nonempty reasoning deltas as idle-deadline progress", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-reasoning-progress-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const thinkingEvent = () =>
+      `${JSON.stringify({
+        type: "message_update",
+        assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "reasoning" },
+      })}\n`;
+    const reasoningTimers = [
+      setTimeout(() => child.stdout.emit("data", thinkingEvent()), 600),
+      setTimeout(() => child.stdout.emit("data", thinkingEvent()), 1_200),
+    ];
+    const closeTimer = setTimeout(() => child.emit("close", 0, null), 1_500);
+
+    try {
+      const result = await tools.agent.execute(
+        "call-watchdog-reasoning-progress",
+        {
+          agent: "worker",
+          task: "Keep reasoning without producing text",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(result.details.results[0].termination).toBeUndefined();
+    } finally {
+      for (const timer of reasoningTimers) clearTimeout(timer);
+      clearTimeout(closeTimer);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("does not reset the idle deadline for unmatched or duplicate tool-end events", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-unmatched-tool-end-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const endTimers = [
+      setTimeout(() => {
+        child.stdout.emit(
+          "data",
+          `${JSON.stringify({ type: "tool_execution_start", toolCallId: "started", toolName: "read" })}\n`,
+        );
+      }, 100),
+      setTimeout(() => {
+        const event = (toolCallId: string) =>
+          `${JSON.stringify({ type: "tool_execution_end", toolCallId, result: "done" })}\n`;
+        child.stdout.emit("data", event("started"));
+      }, 200),
+      setTimeout(() => {
+        const event = (toolCallId: string) =>
+          `${JSON.stringify({ type: "tool_execution_end", toolCallId, result: "done" })}\n`;
+        child.stdout.emit("data", event("unmatched"));
+        child.stdout.emit("data", event("started"));
+      }, 700),
+    ];
+
+    try {
+      const startedAt = Date.now();
+      const result = await tools.agent.execute(
+        "call-watchdog-unmatched-tool-end",
+        {
+          agent: "worker",
+          task: "Ignore unmatched tool-end events as progress",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "idle",
+      });
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+    } finally {
+      for (const timer of endTimers) clearTimeout(timer);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("keeps the first timeout and bounded cleanup when tool events arrive during cleanup", async () => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-cleanup-events-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockReturnValue(true);
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const sensitiveToolName = `secret\n${"tool".repeat(40)}`;
+    const toolStart = setTimeout(() => {
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({ type: "tool_execution_start", toolCallId: "early-call", toolName: sensitiveToolName })}\n`,
+      );
+    }, 100);
+    const cleanupEvents = setTimeout(() => {
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({ type: "tool_execution_start", toolCallId: "late-call", toolName: "read" })}\n` +
+          `${JSON.stringify({ type: "tool_execution_update", toolCallId: "late-call", partialResult: "still working" })}\n`,
+      );
+    }, 1_200);
+
+    try {
+      const startedAt = Date.now();
+      const execution = tools.agent.execute(
+        "call-watchdog-cleanup-events",
+        {
+          agent: "worker",
+          task: "Keep emitting tool events during cleanup",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(7_100);
+      const result = await execution;
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "idle",
+        limitSeconds: 1,
+        cleanup: "unknown",
+        activeTool: "redacted",
+      });
+      expect(result.details.results[0].termination?.toolElapsedSeconds).toBeGreaterThanOrEqual(0);
+      const summary = result.details.results[0].errorMessage;
+      expect(summary).toContain("idle deadline (1s)");
+      expect(summary).toMatch(/elapsed: \d+s/);
+      expect(summary).toMatch(/progress age: \d+s/);
+      expect(summary).toMatch(/active tool: [a-zA-Z0-9_.:-]{1,64} \(\d+s\)/);
+      expect(summary).toContain("cleanup: unknown");
+      expect(summary).not.toContain("secret");
+      expect(summary.length).toBeLessThan(300);
+      expect(Date.now() - startedAt).toBeLessThan(7_800);
+    } finally {
+      clearTimeout(toolStart);
+      clearTimeout(cleanupEvents);
+      vi.useRealTimers();
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 9_000);
+
+  it("does not reset idle timeout for identical tool updates longer than the stored bound", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-long-duplicate-update-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const longUpdate = "x".repeat(9_000);
+    const update = () =>
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({ type: "tool_execution_update", toolCallId: "long-call", partialResult: longUpdate })}\n`,
+      );
+    const timers = [
+      setTimeout(
+        () =>
+          child.stdout.emit(
+            "data",
+            `${JSON.stringify({ type: "tool_execution_start", toolCallId: "long-call", toolName: "read" })}\n`,
+          ),
+        100,
+      ),
+      setTimeout(update, 600),
+      setTimeout(update, 1_200),
+    ];
+
+    try {
+      const startedAt = Date.now();
+      const result = await tools.agent.execute(
+        "call-watchdog-long-duplicate-update",
+        {
+          agent: "worker",
+          task: "Ignore identical long tool output as progress",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(result.details.results[0].termination).toMatchObject({
+        deadline: "idle",
+        elapsedSeconds: 2,
+      });
+      expect(Date.now() - startedAt).toBeLessThan(1_800);
+    } finally {
+      for (const timer of timers) clearTimeout(timer);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("ignores malformed event shapes and does not reset a duplicate tool start deadline", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-duplicate-tool-start-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const timers = [
+      setTimeout(
+        () =>
+          child.stdout.emit(
+            "data",
+            [
+              "null",
+              "[]",
+              JSON.stringify({ type: "message_update", assistantMessageEvent: [] }),
+              "",
+            ].join("\n"),
+          ),
+        50,
+      ),
+      setTimeout(() => {
+        const start = JSON.stringify({
+          type: "tool_execution_start",
+          toolCallId: "same-id",
+          toolName: "read",
+        });
+        child.stdout.emit("data", `${start}\n`);
+      }, 100),
+      setTimeout(() => {
+        child.stdout.emit(
+          "data",
+          `${JSON.stringify({
+            type: "tool_execution_start",
+            toolCallId: "same-id",
+            toolName: "write",
+          })}\n`,
+        );
+      }, 700),
+    ];
+
+    try {
+      const startedAt = Date.now();
+      const result = await tools.agent.execute(
+        "call-watchdog-duplicate-tool-start",
+        {
+          agent: "worker",
+          task: "Ignore malformed events and duplicate tool starts",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: null, toolSeconds: 1, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "tool",
+        activeTool: "read",
+      });
+      expect(Date.now() - startedAt).toBeLessThan(1_600);
+    } finally {
+      for (const timer of timers) clearTimeout(timer);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("returns a clear failure when a timeout artifact cannot be written", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-artifact-failure-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const sessionFile = path.join(project, "session.jsonl");
+    const outputPath = buildArtifactPath({
+      sessionFile,
+      toolCallId: "call-watchdog-artifact-failure",
+      mode: "single",
+      agent: "worker",
+    });
+    fs.mkdirSync(outputPath, { recursive: true });
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+
+    try {
+      await expect(
+        tools.agent.execute(
+          "call-watchdog-artifact-failure",
+          {
+            agent: "worker",
+            task: "Time out but fail to persist the result",
+            agentScope: "project",
+            confirmProjectAgents: false,
+            watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+          },
+          undefined,
+          undefined,
+          {
+            cwd: project,
+            hasUI: false,
+            sessionManager: { getSessionFile: () => sessionFile },
+          },
+        ),
+      ).rejects.toThrow("Unable to write subagent artifact");
+      expect(child.kill).toHaveBeenCalled();
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("starts a queued parallel task deadline when its child starts", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-parallel-queue-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const children: Array<ReturnType<typeof createPersistenceTestChild>> = [];
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      const index = children.push(child);
+      if (index < 5) setTimeout(() => child.emit("close", 0, null), 200);
+      else {
+        child.kill.mockImplementation(() => {
+          queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+          return true;
+        });
+      }
+      return child as never;
+    });
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const startedAt = Date.now();
+      const result = await tools.agent.execute(
+        "call-watchdog-parallel-queue",
+        {
+          tasks: Array.from({ length: 5 }, (_, index) => ({
+            agent: "worker",
+            task: `Parallel item ${index + 1}`,
+          })),
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(children).toHaveLength(5);
+      expect(result.details.results.slice(0, 4).every((item: any) => !item.termination)).toBe(true);
+      expect(result.details.results[4].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "idle",
+      });
+      expect(Date.now() - startedAt).toBeLessThan(1_800);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("tracks concurrent tool deadlines by tool ID", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-concurrent-tools-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const timers = [
+      setTimeout(
+        () =>
+          child.stdout.emit(
+            "data",
+            `${JSON.stringify({ type: "tool_execution_start", toolCallId: "tool-a", toolName: "read" })}\n`,
+          ),
+        100,
+      ),
+      setTimeout(
+        () =>
+          child.stdout.emit(
+            "data",
+            `${JSON.stringify({ type: "tool_execution_start", toolCallId: "tool-b", toolName: "write" })}\n`,
+          ),
+        200,
+      ),
+    ];
+
+    try {
+      const result = await tools.agent.execute(
+        "call-watchdog-concurrent-tools",
+        {
+          agent: "worker",
+          task: "Keep two tools active concurrently",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: null, toolSeconds: 1, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(result.details.results[0].termination).toMatchObject({
+        deadline: "tool",
+        activeTool: "read",
+      });
+    } finally {
+      for (const timer of timers) clearTimeout(timer);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("stops a chain after a timed-out step without starting the next step", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-chain-stop-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const result = await tools.agent.execute(
+        "call-watchdog-chain-stop",
+        {
+          chain: [
+            { agent: "worker", task: "First step" },
+            { agent: "worker", task: "Second step receives {previous}" },
+          ],
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+          agentScope: "project",
+          confirmProjectAgents: false,
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.details.results).toHaveLength(1);
+      expect(result.details.results[0].termination).toMatchObject({ kind: "watchdog" });
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(result.details.results[0].outputPath)).toBe(true);
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("keeps the watchdog active after session shutdown closes the inspector", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-session-shutdown-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const events: Record<string, () => void> = {};
+    const tools = registerPersistenceTestTools(undefined, events);
+
+    try {
+      const execution = tools.agent.execute(
+        "call-watchdog-session-shutdown",
+        {
+          agent: "worker",
+          task: "Keep the watchdog active after session shutdown",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+      events.session_shutdown?.();
+      const result = await execution;
+
+      expect(child.kill).toHaveBeenCalled();
+      expect(result.details.results[0].stopReason).toBeUndefined();
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "idle",
+      });
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("keeps the task deadline across model fallback attempts", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-fallback-deadline-",
+      "---\nname: worker\ndescription: Test worker\nmodel: test/fallback\n---\n",
+    );
+    const children: Array<ReturnType<typeof createPersistenceTestChild>> = [];
+    vi.mocked(spawn).mockImplementation(() => {
+      const child = createPersistenceTestChild();
+      children.push(child);
+      if (children.length === 1) {
+        setTimeout(() => {
+          child.stderr.emit("data", "No API key configured");
+          child.emit("close", 1, null);
+        }, 50);
+      } else {
+        child.kill.mockImplementation(() => {
+          queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+          return true;
+        });
+        const timer = setInterval(
+          () =>
+            child.stdout.emit(
+              "data",
+              `${JSON.stringify({
+                type: "message_update",
+                assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "working" },
+              })}\n`,
+            ),
+          100,
+        );
+        child.once("close", () => clearInterval(timer));
+      }
+      return child as never;
+    });
+    const tools = registerPersistenceTestTools();
+
+    try {
+      const result = await tools.agent.execute(
+        "call-watchdog-fallback-deadline",
+        {
+          agent: "worker",
+          task: "Keep the deadline across fallback attempts",
+          model: "test/primary",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: null, toolSeconds: null, taskSeconds: 1 },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(children).toHaveLength(2);
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "task",
+      });
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("returns a timeout artifact when a child makes no progress", async () => {
+    const project = createPersistenceTestProject(
+      "watchdog-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const fallback = setTimeout(() => child.emit("close", 0, null), 2000);
+
+    try {
+      const result = await tools.agent.execute(
+        "call-watchdog",
+        {
+          agent: "worker",
+          task: "Run a silent task",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "idle",
+      });
+      expect(result.content[0].text).toContain("timed out");
+      const artifact = fs.readFileSync(result.details.results[0].outputPath, "utf8");
+      expect(artifact).toContain("idle");
+      expect(artifact).not.toContain("Status: completed");
+    } finally {
+      clearTimeout(fallback);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5000);
+});
 
 describe("subagent process launch", () => {
   it.each([
@@ -1212,6 +3671,297 @@ describe("subagent execution options", () => {
   });
 });
 
+describe("completed message events", () => {
+  it.each([
+    [
+      "deferred assistant messages",
+      {
+        role: "assistant",
+        content: [],
+        api: "test-api",
+        provider: "test-provider",
+        model: "test-model",
+        usage: {
+          input: 1,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "deferred",
+        timestamp: 1,
+      },
+    ],
+    [
+      "custom messages with string content",
+      {
+        role: "custom",
+        customType: "test-message",
+        content: "extension context",
+        display: true,
+        timestamp: 1,
+      },
+    ],
+    [
+      "bash execution messages without content",
+      {
+        role: "bashExecution",
+        command: "printf test",
+        output: "test",
+        exitCode: 0,
+        cancelled: false,
+        truncated: false,
+        timestamp: 1,
+      },
+    ],
+    [
+      "branch summary messages",
+      { role: "branchSummary", summary: "Earlier branch", fromId: null, timestamp: 1 },
+    ],
+    [
+      "compaction summary messages",
+      { role: "compactionSummary", summary: "Earlier context", tokensBefore: 100, timestamp: 1 },
+    ],
+  ])("accepts %s from a registered agent as progress", async (_name, message) => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-message-variant-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const emitMessage = setTimeout(() => {
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({ type: "message_start", message })}\n` +
+          `${JSON.stringify({ type: "message_end", message })}\n`,
+      );
+    }, 500);
+    const closeChild = setTimeout(() => child.emit("close", 0, null), 1_250);
+
+    try {
+      const execution = tools.agent.execute(
+        "call-watchdog-message-variant",
+        {
+          agent: "worker",
+          task: "Accept a Pi message variant",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_250);
+      const result = await execution;
+
+      expect(result.details.results[0].termination).toBeUndefined();
+      expect(result.details.results[0].exitCode).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      clearTimeout(emitMessage);
+      clearTimeout(closeChild);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reset the idle deadline for malformed or unstarted message completions", async () => {
+    vi.useFakeTimers();
+    const project = createPersistenceTestProject(
+      "watchdog-malformed-message-end-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    child.kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGTERM"));
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const invalidCompletions = setTimeout(() => {
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "not started" }],
+            api: "test-api",
+            provider: "test-provider",
+            model: "test-model",
+            usage: {
+              input: 4,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 6,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+            },
+            stopReason: "stop",
+            timestamp: 1,
+          },
+        })}\n` +
+          `${JSON.stringify({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [],
+              api: "test-api",
+              provider: "test-provider",
+              model: "test-model",
+              stopReason: "stop",
+            },
+          })}\n` +
+          `${JSON.stringify({ type: "message_end", message: { role: "unknown" } })}\n`,
+      );
+    }, 700);
+
+    try {
+      const startedAt = Date.now();
+      const execution = tools.agent.execute(
+        "call-watchdog-malformed-message-end",
+        {
+          agent: "worker",
+          task: "Ignore malformed completed messages",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: 1, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await execution;
+
+      expect(result.details.results[0].termination).toMatchObject({
+        kind: "watchdog",
+        deadline: "idle",
+        elapsedSeconds: 1,
+      });
+      expect(Date.now() - startedAt).toBeLessThan(1_500);
+    } finally {
+      vi.useRealTimers();
+      clearTimeout(invalidCompletions);
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 5_000);
+
+  it("counts distinct identical messages once each by their Pi event lifecycles", async () => {
+    const project = createPersistenceTestProject(
+      "identical-message-lifecycles-",
+      "---\nname: worker\ndescription: Test worker\n---\n",
+    );
+    const child = createPersistenceTestChild();
+    vi.mocked(spawn).mockReturnValue(child as never);
+    const tools = registerPersistenceTestTools();
+    const assistantMessage = (timestamp: number) => ({
+      role: "assistant",
+      content: [{ type: "text", text: "same completed response" }],
+      api: "test-api",
+      provider: "test-provider",
+      model: "test-model",
+      usage: {
+        input: 3,
+        output: 2,
+        cacheRead: 1,
+        cacheWrite: 0,
+        totalTokens: 6,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.1 },
+      },
+      stopReason: "stop",
+      timestamp,
+    });
+
+    try {
+      const execution = tools.agent.execute(
+        "call-identical-message-lifecycles",
+        {
+          agent: "worker",
+          task: "Count both identical messages",
+          agentScope: "project",
+          confirmProjectAgents: false,
+          watchdog: { idleSeconds: null, toolSeconds: null, taskSeconds: null },
+        },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalled());
+      for (const timestamp of [10, 11]) {
+        const message = assistantMessage(timestamp);
+        emitPersistenceTestMessage(child, message);
+        child.stdout.emit("data", `${JSON.stringify({ type: "message_end", message })}\n`);
+      }
+      const toolResult = {
+        role: "toolResult",
+        toolCallId: "search-1",
+        toolName: "web_search",
+        content: [],
+        usage: {
+          input: 5,
+          output: 4,
+          cacheRead: 2,
+          cacheWrite: 1,
+          totalTokens: 12,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.3 },
+        },
+        isError: false,
+        timestamp: 12,
+      };
+      child.stdout.emit(
+        "data",
+        `${JSON.stringify({ type: "message_start", message: toolResult })}\n`,
+      );
+      const completedToolResult = `${JSON.stringify({ type: "message_end", message: toolResult })}\n`;
+      child.stdout.emit("data", completedToolResult);
+      child.stdout.emit("data", completedToolResult);
+      child.emit("close", 0, null);
+
+      const result = await execution;
+      expect(result.details.results[0].usage).toMatchObject({
+        input: 6,
+        output: 4,
+        cacheRead: 2,
+        turns: 2,
+      });
+      expect(result.details.results[0].descendantUsage).toMatchObject({
+        input: 5,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+      });
+    } finally {
+      vi.mocked(spawn).mockReset();
+      vi.unstubAllEnvs();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("nested usage persistence", () => {
   it("captures nested agent and tool-result usage before artifact persistence clears messages", async () => {
     const project = createPersistenceTestProject(
@@ -1293,67 +4043,52 @@ describe("nested usage persistence", () => {
       stopReason: "stop",
       timestamp: 0,
     };
-    child.stdout.emit(
-      "data",
-      `${JSON.stringify({ type: "message_end", message: assistantMessage })}\n`,
-    );
-    child.stdout.emit(
-      "data",
-      `${JSON.stringify({
-        type: "message_end",
-        message: {
-          role: "toolResult",
-          toolCallId: "nested-call",
-          toolName: "agent",
-          content: [],
-          details: nestedDetails,
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 1,
-            cacheWrite: 1,
-            totalTokens: 4,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0.1,
-            },
-          },
-          isError: false,
-          timestamp: 1,
+    emitPersistenceTestMessage(child, assistantMessage);
+    emitPersistenceTestMessage(child, {
+      role: "toolResult",
+      toolCallId: "nested-call",
+      toolName: "agent",
+      content: [],
+      details: nestedDetails,
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 1,
+        cacheWrite: 1,
+        totalTokens: 4,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0.1,
         },
-      })}\n`,
-    );
-    child.stdout.emit(
-      "data",
-      `${JSON.stringify({
-        type: "message_end",
-        message: {
-          role: "toolResult",
-          toolCallId: "tool-call",
-          toolName: "web_search",
-          content: [],
-          usage: {
-            input: 5,
-            output: 4,
-            cacheRead: 2,
-            cacheWrite: 1,
-            totalTokens: 12,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0.3,
-            },
-          },
-          isError: false,
-          timestamp: 2,
+      },
+      isError: false,
+      timestamp: 1,
+    });
+    emitPersistenceTestMessage(child, {
+      role: "toolResult",
+      toolCallId: "tool-call",
+      toolName: "web_search",
+      content: [],
+      usage: {
+        input: 5,
+        output: 4,
+        cacheRead: 2,
+        cacheWrite: 1,
+        totalTokens: 12,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0.3,
         },
-      })}\n`,
-    );
+      },
+      isError: false,
+      timestamp: 2,
+    });
     child.emit("close", 0, null);
 
     const result = await execution;
@@ -1425,10 +4160,7 @@ describe("nested usage persistence", () => {
       errorMessage: "primary failed",
       timestamp: 0,
     };
-    children[0].stdout.emit(
-      "data",
-      `${JSON.stringify({ type: "message_end", message: firstAttempt })}\n`,
-    );
+    emitPersistenceTestMessage(children[0], firstAttempt);
     children[0].stderr.emit("data", "No API key\n");
     children[0].emit("close", 1, null);
 
@@ -1448,10 +4180,7 @@ describe("nested usage persistence", () => {
       stopReason: "stop",
       errorMessage: undefined,
     };
-    children[1].stdout.emit(
-      "data",
-      `${JSON.stringify({ type: "message_end", message: fallbackAttempt })}\n`,
-    );
+    emitPersistenceTestMessage(children[1], fallbackAttempt);
     children[1].emit("close", 0, null);
 
     const result = await execution;
