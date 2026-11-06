@@ -15,7 +15,7 @@ vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 import { spawn } from "node:child_process";
 import subagentExtension from "./index.js";
-import { AgentInspectorComponent, AgentInspectorStore } from "./inspector.js";
+import { AgentInspectorComponent, AgentInspectorStore, getInspectorCleanup } from "./inspector.js";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
@@ -645,6 +645,18 @@ function inspectorView(store: AgentInspectorStore, rows = 20, columns = 100) {
   return { component, tui, done };
 }
 
+describe("subagent inspector cleanup status", () => {
+  it("does not report unknown cleanup when a queued run never starts", () => {
+    expect(getInspectorCleanup({ stopReason: "aborted" })).toBeUndefined();
+  });
+
+  it("reports unknown cleanup after an active process abort", () => {
+    expect(getInspectorCleanup({ termination: { kind: "abort", cleanup: "unknown" } })).toBe(
+      "unknown",
+    );
+  });
+});
+
 describe("subagent inspector store", () => {
   it("stops only running runs and clears the stopper when a run finishes", () => {
     const store = new AgentInspectorStore();
@@ -659,9 +671,69 @@ describe("subagent inspector store", () => {
     run.finish("aborted");
     expect(store.stop(runId)).toBe(false);
   });
+
+  it("creates externally identified queued runs and promotes them to running", () => {
+    const store = new AgentInspectorStore();
+    const run = store.queue({ id: "async-123", agent: "worker", task: "Review" });
+
+    expect(run.status()).toBe("queued");
+    expect(store.snapshot()[0]).toMatchObject({ id: "async-123", status: "queued" });
+
+    run.markRunning();
+    expect(run.status()).toBe("running");
+    expect(store.snapshot()[0].id).toBe("async-123");
+  });
+
+  it("uses the registered stopper for queued runs", () => {
+    const store = new AgentInspectorStore();
+    const run = store.queue({ id: "queued-123", agent: "worker", task: "Review" });
+    const stopper = vi.fn();
+    run.setStopper(stopper);
+
+    expect(store.stop("queued-123")).toBe(true);
+    expect(stopper).toHaveBeenCalledOnce();
+  });
 });
 
 describe("subagent inspector TUI", () => {
+  it("does not show cleanup uncertainty for a queued run canceled before start", () => {
+    const store = new AgentInspectorStore();
+    const run = store.queue({ id: "queued-123", agent: "worker", task: "Waiting" });
+    run.finish("aborted");
+    const { component } = inspectorView(store, 30, 100);
+
+    component.handleInput("\r");
+    expect(component.render(100).join("\n")).not.toContain("Cleanup: unknown");
+    component.dispose();
+  });
+
+  it("shows a terminal artifact path in the run details", () => {
+    const store = new AgentInspectorStore();
+    const run = store.queue({ id: "async-123", agent: "worker", task: "Review" });
+    run.setArtifactPath("/tmp/subagent-result.md");
+    run.markRunning();
+    run.finish("completed");
+    const { component } = inspectorView(store, 30, 100);
+
+    component.handleInput("\r");
+    expect(component.render(100).join("\n")).toContain("/tmp/subagent-result.md");
+    component.dispose();
+  });
+
+  it("shows the stop control for a queued run", () => {
+    const store = new AgentInspectorStore();
+    const run = store.queue({ id: "queued-123", agent: "worker", task: "Waiting" });
+    const stopper = vi.fn();
+    run.setStopper(stopper);
+    const { component } = inspectorView(store);
+
+    component.handleInput("\r");
+    expect(component.render(80).at(-1)).toContain("x stop");
+    component.handleInput("x");
+    expect(stopper).toHaveBeenCalledOnce();
+    component.dispose();
+  });
+
   it("shows model provenance separately in the detail view", () => {
     const store = new AgentInspectorStore();
     const run = store.start({ agent: "worker", task: "Review" });

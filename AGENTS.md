@@ -2,7 +2,7 @@
 
 ## Context
 
-- Read `CONTEXT.md` when defining or changing agent terminology.
+- Read `GLOSSARY.md` when defining or changing agent terminology.
 - Before changing user-facing behavior, read the relevant guide linked from `README.md`. Use it to identify the existing contract, and update it if the requested behavior changes that contract.
 - For agent discovery or configuration changes, read `docs/agent-definitions.md` and `docs/subagent-overrides.md`. Check both execution and agent listings against the same resolution and validation rules.
 - For web request or content conversion changes, read `docs/web-search.md` and its linked ADR. Preserve the documented destination checks, download limits, cancellation, and source-trust rules unless the requested change explicitly revises them.

@@ -10,7 +10,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 
 ## Features
 
-- **Subagent tool** — Delegate tasks to specialized agents with isolated context windows. Supports single, parallel, and chained (sequential) execution modes.
+- **Subagent tool** — Delegate tasks to specialized agents with isolated context windows. Supports synchronous single, parallel, and chained (sequential) execution, plus asynchronous single and parallel runs that the parent can message and monitor.
 - **Ask user tool** — Ask one or more structured questions and collect answers in TUI or RPC mode.
 - **Web search & fetch** — Search DuckDuckGo and fetch page content directly from pi.
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
@@ -40,18 +40,18 @@ Once installed, the package's extensions, agents, prompts, and web-search skill 
 
 Detailed guides live in [`docs/`](docs/):
 
-| Document                                         | Covers                                             |
-| ------------------------------------------------ | -------------------------------------------------- |
-| [Extensions](docs/extensions.md)                 | Tools and slash commands each extension adds       |
-| [Automatic recaps](docs/automatic-recaps.md)     | Global `/summary` settings, task scope, and limits |
-| [Web search and fetch](docs/web-search.md)       | Search, fetch, pagination, and safety limits       |
-| [Subagent tool](docs/subagent-tool.md)           | Single, parallel, and chained task examples        |
-| [Agent inspector](docs/agent-inspector.md)       | Inspect running and completed agent runs           |
-| [Agent definitions](docs/agent-definitions.md)   | Agent files, built-in agents, AGENTS example       |
-| [Prompts](docs/prompts.md)                       | Workflow prompt templates                          |
-| [Voice dictation](docs/voice-dictation.md)       | Foundry Local setup and `/dictate` usage           |
-| [Session costs](docs/session-costs.md)           | `/session-costs` report and token accounting       |
-| [Subagent overrides](docs/subagent-overrides.md) | Per-agent `settings.json` overrides                |
+| Document                                         | Covers                                                            |
+| ------------------------------------------------ | ----------------------------------------------------------------- |
+| [Extensions](docs/extensions.md)                 | Tools and slash commands each extension adds                      |
+| [Automatic recaps](docs/automatic-recaps.md)     | Global `/summary` settings, task scope, and limits                |
+| [Web search and fetch](docs/web-search.md)       | Search, fetch, pagination, and safety limits                      |
+| [Subagent tool](docs/subagent-tool.md)           | Synchronous and asynchronous tasks, messages, reports, and limits |
+| [Agent inspector](docs/agent-inspector.md)       | Inspect synchronous and asynchronous agent runs                   |
+| [Agent definitions](docs/agent-definitions.md)   | Agent files, built-in agents, AGENTS example                      |
+| [Prompts](docs/prompts.md)                       | Workflow prompt templates                                         |
+| [Voice dictation](docs/voice-dictation.md)       | Foundry Local setup and `/dictate` usage                          |
+| [Session costs](docs/session-costs.md)           | `/session-costs` report and token accounting                      |
+| [Subagent overrides](docs/subagent-overrides.md) | Per-agent `settings.json` overrides                               |
 
 ## Project Structure
 

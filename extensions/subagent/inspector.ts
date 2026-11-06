@@ -16,7 +16,13 @@ const MAX_TOOL_ACTIVITIES = 100;
 const TRUNCATION_NOTICE = "[inspector output truncated; older content omitted]";
 const ACTIVITY_NOTICE = "[older tool activity omitted to stay within the inspector budget]";
 
-export type AgentInspectorStatus = "running" | "completed" | "failed" | "aborted" | "timed out";
+export type AgentInspectorStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "aborted"
+  | "timed out";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -40,6 +46,11 @@ export function getInspectorMessageText(message: unknown): string {
   return isRecord(message) && message.role === "assistant" ? getInspectorText(message.content) : "";
 }
 
+export function getInspectorCleanup(result: unknown): "unknown" | undefined {
+  if (!isRecord(result) || !isRecord(result.termination)) return undefined;
+  return result.termination.kind === "abort" ? "unknown" : undefined;
+}
+
 interface InspectorResponse {
   sequence: number;
   text: string;
@@ -61,6 +72,7 @@ interface AgentInspectorRun {
   model?: string;
   modelProvenance?: ModelProvenance;
   thinking?: SubagentThinkingLevel;
+  artifactPath?: string;
   status: AgentInspectorStatus;
   cleanup?: "unknown";
   text: string;
@@ -72,6 +84,8 @@ interface AgentInspectorRun {
 export interface AgentInspectorRunHandle {
   setModel(model: string | undefined): void;
   setModelProvenance(provenance: ModelProvenance): void;
+  setArtifactPath(path: string | undefined): void;
+  markRunning(): void;
   setText(text: string): void;
   messageStart(text?: string): void;
   appendText(delta: string): void;
@@ -80,7 +94,7 @@ export interface AgentInspectorRunHandle {
   toolUpdate(id: string, output: string): void;
   toolEnd(id: string, output: string, isError: boolean): void;
   setStopper(stopper: () => void): void;
-  finish(status: Exclude<AgentInspectorStatus, "running">, cleanup?: "unknown"): void;
+  finish(status: Exclude<AgentInspectorStatus, "queued" | "running">, cleanup?: "unknown"): void;
   status(): AgentInspectorStatus;
 }
 
@@ -128,13 +142,31 @@ export class AgentInspectorStore {
     model?: string;
     thinking?: SubagentThinkingLevel;
   }): AgentInspectorRunHandle {
+    return this.createRun(options, `run-${++this.sequence}`, "running");
+  }
+
+  queue(options: {
+    id: string;
+    agent: string;
+    task: string;
+    model?: string;
+    thinking?: SubagentThinkingLevel;
+  }): AgentInspectorRunHandle {
+    return this.createRun(options, options.id, "queued");
+  }
+
+  private createRun(
+    options: { agent: string; task: string; model?: string; thinking?: SubagentThinkingLevel },
+    id: string,
+    status: AgentInspectorStatus,
+  ): AgentInspectorRunHandle {
     const run: AgentInspectorRun = {
-      id: `run-${++this.sequence}`,
+      id,
       agent: boundedTail(options.agent, 256),
       task: boundedTail(options.task, 4_000),
       model: options.model,
       thinking: options.thinking,
-      status: "running",
+      status,
       text: "",
       responses: [],
       tools: [],
@@ -145,6 +177,7 @@ export class AgentInspectorStore {
     let activitySequence = 0;
     let activeMessage: InspectorResponse | undefined;
     const isActive = () => this.runs.get(run.id) === run && run.status === "running";
+    const isTracked = () => this.runs.get(run.id) === run;
     const message = () => {
       if (!activeMessage) {
         activeMessage = { sequence: ++activitySequence, text: "" };
@@ -203,6 +236,16 @@ export class AgentInspectorStore {
         run.modelProvenance = structuredClone(provenance);
         this.notify();
       },
+      setArtifactPath: (path) => {
+        if (!isTracked()) return;
+        run.artifactPath = path;
+        this.notify();
+      },
+      markRunning: () => {
+        if (!isTracked() || run.status !== "queued") return;
+        run.status = "running";
+        this.notify();
+      },
       setText: (text) => {
         if (!isActive()) return;
         run.responses = [];
@@ -248,18 +291,20 @@ export class AgentInspectorStore {
       toolUpdate: (id, output) => updateTool(id, output),
       toolEnd: (id, output, isError) => updateTool(id, output, isError ? "failed" : "completed"),
       setStopper: (stopper) => {
-        if (!isActive()) return;
+        if (!isTracked() || (run.status !== "queued" && run.status !== "running")) return;
         this.stoppers.set(run.id, stopper);
       },
       finish: (status, cleanup) => {
-        if (!isActive()) return;
+        if (!isTracked() || (run.status !== "queued" && run.status !== "running")) return;
         this.stoppers.delete(run.id);
         run.status = status;
         run.cleanup = cleanup;
         for (const tool of run.tools) {
           if (tool.status === "running") tool.status = status === "aborted" ? "aborted" : "failed";
         }
-        const completed = [...this.runs.values()].filter((item) => item.status !== "running");
+        const completed = [...this.runs.values()].filter(
+          (item) => item.status !== "running" && item.status !== "queued",
+        );
         for (const item of completed.slice(0, Math.max(0, completed.length - MAX_COMPLETED_RUNS))) {
           this.runs.delete(item.id);
         }
@@ -321,7 +366,7 @@ export class AgentInspectorComponent {
     }
     if (this.detail) {
       const run = this.selectedRun(runs);
-      if (data === "x" && run?.status === "running") {
+      if (data === "x" && (run?.status === "queued" || run?.status === "running")) {
         this.store.stop(run.id);
         this.tui.requestRender();
         return;
@@ -389,7 +434,7 @@ export class AgentInspectorComponent {
     const footer = this.theme.fg(
       "dim",
       this.detail
-        ? `Esc back · ↑↓ scroll · PgUp/PgDn · Home/End · ${this.followLatest ? "following" : "paused"}${run?.status === "running" ? " · x stop" : ""}`
+        ? `Esc back · ↑↓ scroll · PgUp/PgDn · Home/End · ${this.followLatest ? "following" : "paused"}${run?.status === "queued" || run?.status === "running" ? " · x stop" : ""}`
         : "↑↓ select · Enter inspect · Esc close",
     );
     return [
@@ -419,6 +464,8 @@ export class AgentInspectorComponent {
     switch (status) {
       case "running":
         return "warning" as const;
+      case "queued":
+        return "muted" as const;
       case "completed":
         return "success" as const;
       case "failed":
@@ -432,6 +479,7 @@ export class AgentInspectorComponent {
   private statusIcon(status: AgentInspectorStatus): string {
     const icons: Record<AgentInspectorStatus, string> = {
       running: "⏳",
+      queued: "…",
       completed: "✓",
       failed: "✗",
       "timed out": "⌛",
@@ -533,6 +581,7 @@ export class AgentInspectorComponent {
   private detailLines(run: AgentInspectorRun, width: number): string[] {
     const lines: string[] = [];
     if (run.cleanup) lines.push(this.theme.fg("warning", "Cleanup: unknown"));
+    if (run.artifactPath) lines.push(`${this.theme.fg("muted", "Artifact:")} ${run.artifactPath}`);
     if (run.modelProvenance) {
       const provenance = run.modelProvenance;
       lines.push(`Requested selection: ${provenance.requested ?? "not specified"}`);

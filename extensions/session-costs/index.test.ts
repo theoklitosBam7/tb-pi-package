@@ -82,6 +82,35 @@ const subagentEntry = (
   },
 });
 
+const asyncSubagentResultEntry = (id: string, runId: string): SessionEntry => ({
+  type: "custom_message",
+  id,
+  parentId: null,
+  timestamp: "2026-01-01T00:00:00.000Z",
+  customType: "subagent-result",
+  content: "Subagent completed",
+  display: false,
+  details: {
+    runId,
+    usageVersion: 3,
+    mode: "single",
+    agentScope: "user",
+    results: [
+      {
+        ...subagentResult({ input: 7, output: 2, cacheRead: 3, cacheWrite: 1, cost: 0.25 }),
+        descendantUsage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0.05,
+        },
+        descendantRuns: 1,
+      },
+    ],
+  },
+});
+
 describe("collectSessionUsage", () => {
   it("matches Pi's billed usage across all session entry types", () => {
     const entries = [
@@ -311,5 +340,27 @@ describe("collectSessionUsage", () => {
     });
     expect(report.subagents.cost).toBeCloseTo(0.7);
     expect(report.subagentRuns).toBe(4);
+  });
+
+  it("counts each asynchronous terminal run once and preserves synchronous usage", () => {
+    const asyncEntry = asyncSubagentResultEntry("async-1", "run-1");
+    const report = collectSessionUsage([
+      subagentEntry("sync", "single", [
+        subagentResult({ input: 5, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0.1 }),
+      ]),
+      asyncEntry,
+      { ...asyncEntry, id: "async-duplicate" },
+      asyncSubagentResultEntry("async-2", "run-2"),
+    ]);
+
+    expect(report.subagents).toEqual({
+      input: 21,
+      output: 7,
+      cacheRead: 6,
+      cacheWrite: 2,
+      cost: 0.7,
+    });
+    expect(report.subagentRuns).toBe(5);
+    expect(report.warnings).toEqual([]);
   });
 });

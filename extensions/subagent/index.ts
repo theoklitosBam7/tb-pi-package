@@ -49,6 +49,8 @@ import {
 import {
   AgentInspectorComponent,
   AgentInspectorStore,
+  type AgentInspectorRunHandle,
+  getInspectorCleanup,
   getInspectorMessageText,
   getInspectorText,
 } from "./inspector.js";
@@ -74,6 +76,14 @@ import {
   type WatchdogTermination,
   writeResultArtifact,
 } from "./result.js";
+import { createRpcPeer, type RpcPeer } from "./rpc-peer.js";
+import { createReportServer, getReportExtensionPath, type ReportServer } from "./report.js";
+import {
+  createRunManager,
+  type RunContext,
+  type RunManager,
+  type RunOwner,
+} from "./run-manager.js";
 
 /**
  * Find an agent by its subagent_type.
@@ -562,6 +572,8 @@ type RunSingleAgentOptions = {
   thinkingOverride?: SubagentThinkingLevel | "inherit";
   inspector?: AgentInspectorStore;
   watchdog: WatchdogConfig;
+  managedRun?: RunContext;
+  managedInspector?: AgentInspectorRunHandle;
 };
 
 async function runSingleAgent({
@@ -583,6 +595,8 @@ async function runSingleAgent({
   thinkingOverride,
   inspector,
   watchdog,
+  managedRun,
+  managedInspector,
 }: RunSingleAgentOptions): Promise<SingleResult> {
   const resolution = resolveAgent(agents, agentName, subagentType);
 
@@ -692,14 +706,16 @@ async function runSingleAgent({
   const forwardAbort = () => runAbortController.abort();
   if (signal?.aborted) forwardAbort();
   else signal?.addEventListener("abort", forwardAbort, { once: true });
-  const inspectorRun = inspector?.start({
-    agent: resolvedName,
-    task,
-    model: modelsToTry[0],
-    thinking: resolvedOptions.thinking,
-  });
+  const inspectorRun =
+    managedInspector ??
+    inspector?.start({
+      agent: resolvedName,
+      task,
+      model: modelsToTry[0],
+      thinking: resolvedOptions.thinking,
+    });
   inspectorRun?.setModelProvenance(modelProvenance);
-  inspectorRun?.setStopper(() => runAbortController.abort());
+  if (!managedRun) inspectorRun?.setStopper(() => runAbortController.abort());
 
   // Helper function to run with a specific model
   let modelErrorMatcher = createModelErrorMatcher();
@@ -707,6 +723,7 @@ async function runSingleAgent({
     modelErrorMatcher = createModelErrorMatcher();
     let tmpPromptDir: string | null = null;
     let tmpPromptPath: string | null = null;
+    let reportServer: ReportServer | undefined;
 
     const currentResult: SingleResult = {
       agent: resolvedName,
@@ -767,13 +784,33 @@ async function runSingleAgent({
         tmpPromptPath = tmp.filePath;
       }
 
-      const args = buildSubagentArgs({
+      let args = buildSubagentArgs({
         model,
         thinking: resolvedOptions.thinking,
-        tools: resolvedOptions.tools,
+        tools:
+          managedRun && resolvedOptions.tools
+            ? [...resolvedOptions.tools, "report_to_parent"]
+            : resolvedOptions.tools,
         promptPath: tmpPromptPath ?? undefined,
         task,
       });
+      if (managedRun) {
+        reportServer = await createReportServer({
+          runId: managedRun.runId,
+          onReport: async ({ message }) =>
+            (await managedRun.report(message))
+              ? { accepted: true }
+              : { accepted: false, reason: "Report rejected or limit reached." },
+        });
+        args = [
+          "--mode",
+          "rpc",
+          "--no-session",
+          ...args.slice(4, -1),
+          "--extension",
+          getReportExtensionPath(),
+        ];
+      }
       inspectorRun?.setModel(model);
       let wasAborted = false;
 
@@ -787,12 +824,23 @@ async function runSingleAgent({
         const invocation = getPiInvocation(args);
         modelProvenance.attempted.push(model ?? null);
         inspectorRun?.setModelProvenance(modelProvenance);
+        const childEnv = { ...process.env };
+        delete childEnv.SUBAGENT_REPORT_SOCKET;
+        delete childEnv.SUBAGENT_REPORT_TOKEN;
+        delete childEnv.SUBAGENT_REPORT_RUN_ID;
+        if (reportServer)
+          Object.assign(childEnv, reportServer.environment, { SUBAGENT_MANAGED_CHILD: "1" });
         const proc = spawn(invocation.command, invocation.args, {
           cwd: cwd ?? defaultCwd,
           shell: false,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [managedRun ? "pipe" : "ignore", "pipe", "pipe"],
           detached: process.platform !== "win32",
+          env: childEnv,
         });
+        let rpcPeer: RpcPeer | undefined;
+        let rpcSettled = false;
+        let rpcFailed = false;
+        let unregisterControl: (() => void) | undefined;
         let buffer = "";
         let discardingLine = false;
         let stdoutTruncated = false;
@@ -940,6 +988,7 @@ async function runSingleAgent({
           }
 
           if (!event || typeof event !== "object" || Array.isArray(event)) return;
+          if (rpcPeer?.acceptLine(event) === "consumed") return;
 
           if (event.type === "message_start") {
             captureDispatch(event.message);
@@ -1069,7 +1118,7 @@ async function runSingleAgent({
             offset = newline + 1;
           }
         };
-        proc.stdout.on("data", (data) => {
+        proc.stdout?.on("data", (data) => {
           if (closed) return;
           consumeStdout(typeof data === "string" ? data : stdoutDecoder.write(data));
         });
@@ -1089,7 +1138,7 @@ async function runSingleAgent({
           currentResult.stderr += prefix;
           stderrTruncated = true;
         };
-        proc.stderr.on("data", (data) => {
+        proc.stderr?.on("data", (data) => {
           if (!closed) {
             consumeStderr(typeof data === "string" ? data : stderrDecoder.write(data));
           }
@@ -1102,6 +1151,8 @@ async function runSingleAgent({
           if (escalationTimer !== undefined) clearTimeout(escalationTimer);
           if (boundedCloseTimer !== undefined) clearTimeout(boundedCloseTimer);
           cleanupAbort();
+          unregisterControl?.();
+          rpcPeer?.close();
           consumeStderr(stderrDecoder.end());
           if (stderrTruncated) currentResult.stderr += "\n[stderr truncated]";
           if (stdoutTruncated) currentResult.stderr += "\n[stdout line truncated]";
@@ -1117,7 +1168,10 @@ async function runSingleAgent({
           if (closed) return;
           consumeStdout(stdoutDecoder.end());
           if (!discardingLine && buffer.trim()) processLine(buffer);
-          finish(signalName ? 1 : (code ?? 1));
+          if (managedRun && (!rpcSettled || rpcFailed) && !wasAborted && !watchdogTermination) {
+            currentResult.stderr += "\nRPC child exited before settlement.";
+            finish(1);
+          } else finish(signalName ? 1 : (code ?? 1));
         });
 
         proc.on("error", () => {
@@ -1144,6 +1198,43 @@ async function runSingleAgent({
             );
           },
         });
+        if (managedRun && proc.stdin) {
+          rpcPeer = createRpcPeer({ stdin: proc.stdin, commandTimeoutMs: 10_000 });
+          unregisterControl = managedRun.registerControl(async (message) => {
+            if (!rpcPeer) throw new Error("RPC child is unavailable.");
+            await rpcPeer.send({ type: message.mode, message: message.content });
+          });
+          const failRpc = (error: unknown) => {
+            if (closed || wasAborted || watchdogTermination) return;
+            if (rpcFailed) return;
+            rpcFailed = true;
+            currentResult.stderr += `\nRPC error: ${error instanceof Error ? error.message : String(error)}`;
+            sendCleanupSignal("SIGTERM");
+            escalationTimer = setTimeout(() => {
+              if (!closed && !directChildExited) sendCleanupSignal("SIGKILL");
+              boundedCloseTimer = setTimeout(() => finishRun?.(1), WATCHDOG_CLOSE_WAIT_MS);
+            }, WATCHDOG_CLEANUP_GRACE_MS);
+          };
+          void rpcPeer
+            .waitForSettled()
+            .then(() => {
+              rpcSettled = true;
+              proc.stdin?.end();
+              boundedCloseTimer = setTimeout(
+                () => failRpc(new Error("RPC child did not exit after settlement.")),
+                WATCHDOG_CLEANUP_GRACE_MS,
+              );
+            })
+            .catch(failRpc);
+          void rpcPeer
+            .send({ type: "prompt", message: `Task: ${task}` })
+            .then((response) => {
+              if (isRecord(response.data) && response.data.disposition === "handled") {
+                failRpc(new Error("RPC prompt was handled without starting a run."));
+              }
+            })
+            .catch(failRpc);
+        }
       });
 
       currentResult.exitCode = exitCode;
@@ -1158,6 +1249,7 @@ async function runSingleAgent({
       }
       return currentResult;
     } finally {
+      await reportServer?.close();
       if (tmpPromptPath)
         try {
           fs.unlinkSync(tmpPromptPath);
@@ -1227,7 +1319,7 @@ async function runSingleAgent({
     return lastResult ? mergePreviousUsage(lastResult) : lastResult!;
   } finally {
     signal?.removeEventListener("abort", forwardAbort);
-    if (inspectorRun?.status() === "running") {
+    if (!managedRun && inspectorRun?.status() === "running") {
       const status =
         lastResult?.termination?.kind === "watchdog"
           ? "timed out"
@@ -1327,6 +1419,9 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 });
 
 const SubagentParams = Type.Object({
+  async: Type.Optional(
+    Type.Boolean({ description: "Run single or parallel tasks asynchronously." }),
+  ),
   agent: Type.Optional(
     Type.String({
       description: "Name of the agent to invoke (for single mode)",
@@ -1381,6 +1476,88 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
   const inspector = new AgentInspectorStore();
+  const managedInspectorRuns = new Map<string, AgentInspectorRunHandle>();
+  const asyncRunMetadata = new Map<
+    string,
+    { agentScope: AgentScope; projectAgentsDir: string | null }
+  >();
+  let manager: RunManager | undefined;
+  let generation = 0;
+  const getOwner = (ctx: ExtensionContext): RunOwner => ({
+    sessionId:
+      ctx.sessionManager.getSessionId?.() ?? ctx.sessionManager.getSessionFile() ?? ctx.cwd,
+    generation,
+  });
+  const getManager = async (
+    ctx: ExtensionContext,
+  ): Promise<{ manager: RunManager; owner: RunOwner }> => {
+    let owner = getOwner(ctx);
+    if (manager && manager.sessionId !== owner.sessionId) {
+      generation++;
+      owner = getOwner(ctx);
+      await manager.reset(owner);
+      inspector.clear();
+      managedInspectorRuns.clear();
+      asyncRunMetadata.clear();
+      manager = undefined;
+    }
+    if (!manager) {
+      manager = createRunManager({
+        ...owner,
+        onNotification: (event) => {
+          if (generation !== owner.generation) return;
+          if (event.type === "terminal") {
+            const handle = managedInspectorRuns.get(event.runId);
+            handle?.setArtifactPath(event.artifactPath);
+            const result = "result" in event.state ? event.state.result?.value : undefined;
+            const cleanup = getInspectorCleanup(result);
+            const status =
+              event.state.kind === "timed-out"
+                ? "timed out"
+                : event.state.kind === "completed"
+                  ? "completed"
+                  : event.state.kind === "aborted"
+                    ? "aborted"
+                    : "failed";
+            handle?.finish(status, cleanup);
+            managedInspectorRuns.delete(event.runId);
+          }
+          const runMetadata =
+            event.type === "terminal" ? asyncRunMetadata.get(event.runId) : undefined;
+          if (event.type === "terminal") {
+            asyncRunMetadata.delete(event.runId);
+          }
+          const content =
+            event.type === "report"
+              ? `Subagent ${event.agent} (${event.runId}) report ${event.eventId}:\n${event.content}`
+              : `Subagent ${event.agent} (${event.runId}) ${event.state.kind} (${event.eventId})${event.artifactPath ? `. Artifact: ${event.artifactPath}` : ""}`;
+          const result =
+            event.type === "terminal" && "result" in event.state
+              ? event.state.result?.value
+              : undefined;
+          pi.sendMessage(
+            {
+              customType: event.type === "terminal" ? "subagent-result" : "subagent-report",
+              content,
+              display: true,
+              details:
+                event.type === "terminal" && result
+                  ? {
+                      runId: event.runId,
+                      usageVersion: 3,
+                      mode: "single",
+                      ...runMetadata,
+                      results: [result],
+                    }
+                  : { runId: event.runId, eventId: event.eventId },
+            },
+            { triggerTurn: true, deliverAs: "followUp" },
+          );
+        },
+      });
+    }
+    return { manager, owner };
+  };
   let activeInspectorClose: (() => void) | undefined;
   const openInspector = async (ctx: ExtensionContext): Promise<void> => {
     if (ctx.mode !== "tui") {
@@ -1412,9 +1589,70 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", async () => {
     activeInspectorClose?.();
+    generation++;
+    if (manager) await manager.reset({ sessionId: manager.sessionId, generation });
+    manager = undefined;
     inspector.clear();
+    managedInspectorRuns.clear();
+    asyncRunMetadata.clear();
+  });
+  pi.on("session_start", async (_event, ctx) => {
+    if (manager && manager.sessionId !== getOwner(ctx).sessionId) await getManager(ctx);
+  });
+
+  pi.registerTool({
+    name: "agent_status",
+    label: "Agent status",
+    description: "List asynchronous runs or inspect one run.",
+    parameters: Type.Object({ runId: Type.Optional(Type.String()) }),
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const active = await getManager(ctx);
+      const data = params.runId
+        ? { run: (await active.manager.getRun({ ...active.owner, runId: params.runId })) ?? null }
+        : { runs: await active.manager.listRuns(active.owner) };
+      return { content: [{ type: "text", text: JSON.stringify(data) }], details: {} };
+    },
+  });
+  pi.registerTool({
+    name: "agent_send",
+    label: "Agent send",
+    description: "Queue a steering or follow-up message for an active asynchronous run.",
+    parameters: Type.Object({
+      runId: Type.String(),
+      message: Type.String(),
+      mode: StringEnum(["steer", "follow_up"] as const),
+    }),
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const active = await getManager(ctx);
+      const result = await active.manager.sendMessage({
+        ...active.owner,
+        runId: params.runId,
+        content: params.message,
+        mode: params.mode,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result) }],
+        details: {},
+        isError: result.kind === "rejected",
+      };
+    },
+  });
+  pi.registerTool({
+    name: "agent_cancel",
+    label: "Agent cancel",
+    description: "Cancel an asynchronous run.",
+    parameters: Type.Object({ runId: Type.String() }),
+    async execute(_id, params, _signal, _onUpdate, ctx) {
+      const active = await getManager(ctx);
+      const canceled = await active.manager.cancelRun({ ...active.owner, runId: params.runId });
+      return {
+        content: [{ type: "text", text: JSON.stringify({ canceled }) }],
+        details: {},
+        isError: !canceled,
+      };
+    },
   });
 
   pi.registerCommand("agent-inspector", {
@@ -1522,6 +1760,13 @@ export default function (pi: ExtensionAPI) {
           results,
         });
       const requestedMode = hasChain ? "chain" : hasTasks ? "parallel" : "single";
+      if (params.async && hasChain) {
+        return {
+          content: [{ type: "text", text: "The agent tool does not support asynchronous chains." }],
+          details: makeDetails("chain")([]),
+          isError: true,
+        };
+      }
       const sessionFile =
         ctx.sessionManager.getSessionFile() ??
         path.join(
@@ -1710,6 +1955,193 @@ export default function (pi: ExtensionAPI) {
               details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
             };
         }
+      }
+
+      if (params.async) {
+        if (process.env.SUBAGENT_MANAGED_CHILD === "1") {
+          return {
+            content: [
+              { type: "text", text: "Managed children cannot launch asynchronous subagents." },
+            ],
+            details: makeDetails(requestedMode)([]),
+            isError: true,
+          };
+        }
+        const items = params.tasks?.length
+          ? params.tasks
+          : [
+              {
+                agent: params.agent,
+                subagent_type: params.subagent_type,
+                task: params.task ?? "",
+                cwd: params.cwd,
+                model: params.model,
+                modelFallback: params.modelFallback,
+                thinking: params.thinking,
+                watchdog: params.watchdog,
+              },
+            ];
+        if (items.length > MAX_PARALLEL_TASKS) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Too many parallel tasks (${items.length}). Max is ${MAX_PARALLEL_TASKS}.`,
+              },
+            ],
+            details: makeDetails(requestedMode)([]),
+            isError: true,
+          };
+        }
+        const validated = [];
+        for (const item of items) {
+          const resolution = resolveAgent(agents, item.agent, item.subagent_type);
+          if (resolution.error || !resolution.agent || !resolution.resolvedName || !item.task) {
+            return {
+              content: [{ type: "text", text: resolution.error ?? "Task must not be empty." }],
+              details: makeDetails(requestedMode)([]),
+              isError: true,
+            };
+          }
+          const entry = getAgentOverride(overrides, resolution.resolvedName);
+          const configError = getAgentConfigurationError(resolution.agent, entry);
+          if (configError)
+            return {
+              content: [{ type: "text", text: configError }],
+              details: makeDetails(requestedMode)([]),
+              isError: true,
+            };
+          const modelOverride = item.model ?? params.model;
+          const options = resolveAgentOptions(
+            resolution.agent,
+            entry?.kind === "valid" ? entry.value : undefined,
+            {
+              modelOverride,
+              parentModel: mainAgentModel,
+              parentThinking: mainAgentThinking,
+              thinkingOverride: item.thinking ?? params.thinking,
+            },
+          );
+          if (
+            (item.modelFallback ?? params.modelFallback) === "none" &&
+            ((modelOverride === "inherit" && !mainAgentModel) || !options.modelsToTry[0])
+          ) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Strict model selection requires a concrete model; the requested parent model may be unavailable.",
+                },
+              ],
+              details: makeDetails(requestedMode)([]),
+              isError: true,
+            };
+          }
+          validated.push({ item, agent: resolution.resolvedName });
+        }
+        const active = await getManager(ctx);
+        if (signal?.aborted)
+          return {
+            content: [{ type: "text", text: "Asynchronous launch aborted." }],
+            details: makeDetails(requestedMode)([]),
+            isError: true,
+          };
+        let releaseJobs: () => void = () => {};
+        const jobsReady = new Promise<void>((resolve) => {
+          releaseJobs = resolve;
+        });
+        const scheduled = await active.manager.scheduleBatch({
+          ...active.owner,
+          jobs: validated.map(({ item, agent }, index) => ({
+            agent,
+            task: item.task,
+            execute: async (managedRun: RunContext) => {
+              await jobsReady;
+              const managedInspector = managedInspectorRuns.get(managedRun.runId);
+              managedInspector?.markRunning();
+              const startedAt = new Date().toISOString();
+              const result = await runSingleAgent({
+                defaultCwd: ctx.cwd,
+                agents,
+                agentName: item.agent,
+                subagentType: item.subagent_type,
+                task: item.task,
+                cwd: item.cwd,
+                step: undefined,
+                signal: managedRun.signal,
+                onUpdate: undefined,
+                makeDetails: makeDetails(requestedMode),
+                overrides,
+                modelOverride: item.model ?? params.model,
+                modelFallback: item.modelFallback ?? params.modelFallback,
+                mainAgentModel,
+                mainAgentThinking,
+                thinkingOverride: item.thinking ?? params.thinking,
+                inspector,
+                watchdog: resolveWatchdog({ ...topWatchdog, ...item.watchdog }),
+                managedRun,
+                managedInspector,
+              });
+              await persistResultArtifact({
+                result,
+                mode: requestedMode,
+                index: requestedMode === "parallel" ? index + 1 : undefined,
+                taskLabel:
+                  requestedMode === "parallel" ? `parallel item ${index + 1}` : "single task",
+                startedAt,
+              });
+              const status =
+                result.termination?.kind === "watchdog"
+                  ? "timed-out"
+                  : result.stopReason === "aborted"
+                    ? "aborted"
+                    : isCompletedResult(result)
+                      ? "completed"
+                      : "failed";
+              return {
+                status,
+                artifactPath: result.outputPath,
+                error: result.errorMessage || result.stderr,
+                value: result,
+              };
+            },
+          })),
+        });
+        if (scheduled.kind === "rejected")
+          return {
+            content: [{ type: "text", text: JSON.stringify(scheduled) }],
+            details: makeDetails(requestedMode)([]),
+            isError: true,
+          };
+        for (const run of scheduled.runs) {
+          asyncRunMetadata.set(run.id, {
+            agentScope,
+            projectAgentsDir: discovery.projectAgentsDir,
+          });
+          const handle = inspector.queue({ id: run.id, agent: run.agent, task: run.task });
+          handle.setStopper(() => {
+            void active.manager.cancelRun({ ...active.owner, runId: run.id });
+          });
+          managedInspectorRuns.set(run.id, handle);
+        }
+        if (signal?.aborted) {
+          await Promise.all(
+            scheduled.runs.map((run) =>
+              active.manager.cancelRun({ ...active.owner, runId: run.id }),
+            ),
+          );
+          releaseJobs();
+          return {
+            content: [{ type: "text", text: "Asynchronous launch aborted." }],
+            details: makeDetails(requestedMode)([]),
+            isError: true,
+          };
+        }
+        releaseJobs();
+        return {
+          content: [{ type: "text", text: JSON.stringify({ runs: scheduled.runs }) }],
+          details: makeDetails(requestedMode)([]),
+        };
       }
 
       if (params.chain && params.chain.length > 0) {
