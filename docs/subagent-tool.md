@@ -28,6 +28,8 @@ By default, the `agent` tool runs tasks synchronously in single, parallel, or ch
 
 In a chain, step N+1 receives step N's report wherever its task contains `{previous}`.
 
+The [terminal inspector](agent-inspector.md) is available only in interactive TUI mode. Compatible hosts can subscribe to [portable inspection](portable-inspection.md) for read-only activity without child controls or artifact access. This does not change tool arguments or results.
+
 ## Asynchronous runs
 
 Set `async: true` for a single task or a `tasks` array to start asynchronous runs. The tool validates the full request, schedules the runs, and returns run IDs and initial status snapshots. It does not wait for the children to finish. Async chains are not supported. Managed children also cannot launch asynchronous subagents; they can still use the synchronous modes.
@@ -69,6 +71,8 @@ A watchdog timeout is separate from a child error or a manual stop. It prevents 
 In parallel mode, only the timed-out child is stopped. The synchronous call still waits for its other children to finish or reach their own deadlines. A queued task's timers start when its child process starts, not while it waits for a concurrency slot.
 
 ## Model priority
+
+Omit `model` to use the configured selection order. Empty or whitespace-only model overrides are invalid, including overrides on parallel tasks and chain steps. The tool rejects the whole request before starting any child if any model override is blank. Use `model: "inherit"` to select the parent model explicitly.
 
 The tool resolves each agent's model in this order: the tool input `model`, the settings override, the agent frontmatter, then the parent agent's model. For thinking, the order is tool input, settings override, frontmatter, then the parent level. Set both `model` and `thinking` to `inherit` to use the parent's current values even when settings or frontmatter specify different values. The inspector and artifact show the resolved thinking launch setting. `Thinking: child default (no explicit level passed)` means the runner passed no `--thinking` value. It describes the launch setting, not a measured runtime reasoning budget. A queued run can show the resolved launch setting before execution starts. Settings overrides are described in [Subagent overrides](subagent-overrides.md).
 

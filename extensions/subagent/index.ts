@@ -27,6 +27,7 @@ import {
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { createInspectionPublisher } from "./inspection-publisher.js";
 import { Type } from "typebox";
 import {
   addUsageTotals,
@@ -577,6 +578,7 @@ type RunSingleAgentOptions = {
   mainAgentThinking?: SubagentThinkingLevel; // Fallback: main agent's current thinking level
   thinkingOverride?: SubagentThinkingLevel | "inherit";
   inspector?: AgentInspectorStore;
+  toolCallId?: string;
   watchdog: WatchdogConfig;
   managedRun?: RunContext;
   managedInspector?: AgentInspectorRunHandle;
@@ -600,6 +602,7 @@ async function runSingleAgent({
   mainAgentThinking,
   thinkingOverride,
   inspector,
+  toolCallId,
   watchdog,
   managedRun,
   managedInspector,
@@ -717,6 +720,8 @@ async function runSingleAgent({
     inspector?.start({
       agent: resolvedName,
       task,
+      toolCallId,
+      chainStep: step,
       model: modelsToTry[0],
       thinking: resolvedOptions.thinking,
     });
@@ -1334,10 +1339,7 @@ async function runSingleAgent({
             : lastResult && isCompletedResult(lastResult)
               ? "completed"
               : "failed";
-      inspectorRun.finish(
-        status,
-        lastResult?.termination?.kind === "abort" ? "unknown" : undefined,
-      );
+      inspectorRun.finish(status, lastResult?.termination?.cleanup);
     }
   }
 }
@@ -1360,6 +1362,7 @@ const ThinkingInput = stringEnumSchema(
 );
 
 const ModelInput = Type.String({
+  pattern: "\\S",
   description:
     "Model as provider/id, or 'inherit' for the parent model. Overrides settings and frontmatter.",
 });
@@ -1494,12 +1497,15 @@ const SubagentParams = Type.Object({
 
 export default function (pi: ExtensionAPI) {
   const inspector = new AgentInspectorStore();
+  let inspectionPublisher: ReturnType<typeof createInspectionPublisher> | undefined =
+    createInspectionPublisher({ events: pi.events, store: inspector });
   const managedInspectorRuns = new Map<string, AgentInspectorRunHandle>();
   const asyncRunMetadata = new Map<
     string,
     { agentScope: AgentScope; projectAgentsDir: string | null }
   >();
   let manager: RunManager | undefined;
+  let sessionId: string | undefined;
   let generation = 0;
   const getOwner = (ctx: ExtensionContext): RunOwner => ({
     sessionId:
@@ -1510,7 +1516,10 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionContext,
   ): Promise<{ manager: RunManager; owner: RunOwner }> => {
     let owner = getOwner(ctx);
+    sessionId = owner.sessionId;
     if (manager && manager.sessionId !== owner.sessionId) {
+      inspectionPublisher?.dispose();
+      inspectionPublisher = undefined;
       generation++;
       owner = getOwner(ctx);
       await manager.reset(owner);
@@ -1518,6 +1527,7 @@ export default function (pi: ExtensionAPI) {
       managedInspectorRuns.clear();
       asyncRunMetadata.clear();
       manager = undefined;
+      inspectionPublisher = createInspectionPublisher({ events: pi.events, store: inspector });
     }
     if (!manager) {
       manager = createRunManager({
@@ -1608,16 +1618,31 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_shutdown", async () => {
+    inspectionPublisher?.dispose();
+    inspectionPublisher = undefined;
     activeInspectorClose?.();
     generation++;
     if (manager) await manager.reset({ sessionId: manager.sessionId, generation });
     manager = undefined;
+    sessionId = undefined;
     inspector.clear();
     managedInspectorRuns.clear();
     asyncRunMetadata.clear();
   });
   pi.on("session_start", async (_event, ctx) => {
-    if (manager && manager.sessionId !== getOwner(ctx).sessionId) await getManager(ctx);
+    const nextSessionId = getOwner(ctx).sessionId;
+    if (manager && manager.sessionId !== nextSessionId) {
+      await getManager(ctx);
+    } else if (!manager && sessionId !== undefined && sessionId !== nextSessionId) {
+      inspectionPublisher?.dispose();
+      inspectionPublisher = undefined;
+      generation++;
+      inspector.clear();
+      managedInspectorRuns.clear();
+      asyncRunMetadata.clear();
+    }
+    sessionId = nextSessionId;
+    inspectionPublisher ??= createInspectionPublisher({ events: pi.events, store: inspector });
   });
 
   pi.registerTool({
@@ -1709,6 +1734,25 @@ export default function (pi: ExtensionAPI) {
       const discovery = discoverAgents(ctx.cwd, agentScope);
       const agents = discovery.agents;
       const confirmProjectAgents = params.confirmProjectAgents ?? true;
+
+      const modelValues = [
+        params.model,
+        ...(params.tasks ?? []).map((item) => item.model),
+        ...(params.chain ?? []).map((item) => item.model),
+      ];
+      if (modelValues.some((value) => value !== undefined && value.trim().length === 0)) {
+        return {
+          content: [{ type: "text", text: "Model must be a non-blank string, or omitted." }],
+          details: {
+            usageVersion: 3,
+            mode: "single",
+            agentScope,
+            projectAgentsDir: discovery.projectAgentsDir,
+            results: [],
+          },
+          isError: true,
+        };
+      }
 
       const fallbackValues = [
         params.modelFallback,
@@ -2140,6 +2184,7 @@ export default function (pi: ExtensionAPI) {
             id: run.id,
             agent: run.agent,
             task: run.task,
+            toolCallId,
             thinking: validated[index]?.thinking,
           });
           handle.setStopper(() => {
@@ -2236,6 +2281,7 @@ export default function (pi: ExtensionAPI) {
             mainAgentThinking,
             thinkingOverride: step.thinking ?? params.thinking,
             inspector,
+            toolCallId,
             watchdog: resolveWatchdog({ ...topWatchdog, ...step.watchdog }),
           });
           const previousResultOutput = getFinalOutput(result.messages);
@@ -2381,6 +2427,7 @@ export default function (pi: ExtensionAPI) {
               mainAgentThinking,
               thinkingOverride: t.thinking ?? params.thinking,
               inspector,
+              toolCallId,
               watchdog: resolveWatchdog({ ...topWatchdog, ...t.watchdog }),
             });
             await persistResultArtifact({
@@ -2431,6 +2478,7 @@ export default function (pi: ExtensionAPI) {
           mainAgentThinking,
           thinkingOverride: params.thinking,
           inspector,
+          toolCallId,
           watchdog: topWatchdog,
         });
         await persistResultArtifact({

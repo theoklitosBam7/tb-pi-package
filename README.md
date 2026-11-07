@@ -40,18 +40,19 @@ Once installed, the package's extensions, agents, prompts, and web-search skill 
 
 Detailed guides live in [`docs/`](docs/):
 
-| Document                                         | Covers                                                            |
-| ------------------------------------------------ | ----------------------------------------------------------------- |
-| [Extensions](docs/extensions.md)                 | Tools and slash commands each extension adds                      |
-| [Automatic recaps](docs/automatic-recaps.md)     | Global `/summary` settings, task scope, and limits                |
-| [Web search and fetch](docs/web-search.md)       | Search, fetch, pagination, and safety limits                      |
-| [Subagent tool](docs/subagent-tool.md)           | Synchronous and asynchronous tasks, messages, reports, and limits |
-| [Agent inspector](docs/agent-inspector.md)       | Inspect synchronous and asynchronous agent runs                   |
-| [Agent definitions](docs/agent-definitions.md)   | Agent files, built-in agents, AGENTS example                      |
-| [Prompts](docs/prompts.md)                       | Workflow prompt templates                                         |
-| [Voice dictation](docs/voice-dictation.md)       | Foundry Local setup and `/dictate` usage                          |
-| [Session costs](docs/session-costs.md)           | `/session-costs` report and token accounting                      |
-| [Subagent overrides](docs/subagent-overrides.md) | Per-agent `settings.json` overrides                               |
+| Document                                           | Covers                                                            |
+| -------------------------------------------------- | ----------------------------------------------------------------- |
+| [Extensions](docs/extensions.md)                   | Tools and slash commands each extension adds                      |
+| [Automatic recaps](docs/automatic-recaps.md)       | Global `/summary` settings, task scope, and limits                |
+| [Web search and fetch](docs/web-search.md)         | Search, fetch, pagination, and safety limits                      |
+| [Subagent tool](docs/subagent-tool.md)             | Synchronous and asynchronous tasks, messages, reports, and limits |
+| [Agent inspector](docs/agent-inspector.md)         | Inspect synchronous and asynchronous agent runs                   |
+| [Portable inspection](docs/portable-inspection.md) | Read-only event bus contract for compatible hosts                 |
+| [Agent definitions](docs/agent-definitions.md)     | Agent files, built-in agents, AGENTS example                      |
+| [Prompts](docs/prompts.md)                         | Workflow prompt templates                                         |
+| [Voice dictation](docs/voice-dictation.md)         | Foundry Local setup and `/dictate` usage                          |
+| [Session costs](docs/session-costs.md)             | `/session-costs` report and token accounting                      |
+| [Subagent overrides](docs/subagent-overrides.md)   | Per-agent `settings.json` overrides                               |
 
 ## Project Structure
 

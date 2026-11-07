@@ -1,3 +1,4 @@
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -35,6 +36,7 @@ function registration() {
     { description?: string; handler: (ctx: unknown) => Promise<void> }
   > = {};
   subagentExtension({
+    events: createEventBus(),
     on() {},
     registerTool() {},
     registerCommand(name: string, definition: (typeof commands)[string]) {
@@ -157,6 +159,7 @@ function executionFixture(options: { parentThinking?: string } = {}) {
   const hooks: Record<string, () => void> = {};
   const notifications: unknown[] = [];
   subagentExtension({
+    events: createEventBus(),
     getThinkingLevel: () => options.parentThinking,
     sendMessage(message: unknown) {
       notifications.push(message);
@@ -223,6 +226,50 @@ function executionFixture(options: { parentThinking?: string } = {}) {
 }
 
 describe("subagent inspector live bridge", () => {
+  it.each(["single", "parallel", "chain", "async single", "async parallel"])(
+    "retains the originating tool call for %s runs",
+    async (mode) => {
+      const starts = vi.spyOn(AgentInspectorStore.prototype, "start");
+      const queues = vi.spyOn(AgentInspectorStore.prototype, "queue");
+      try {
+        vi.stubEnv("SUBAGENT_MANAGED_CHILD", "0");
+        const fixture = executionFixture();
+        const task = { agent: "worker", task: "Review" };
+        const params =
+          mode === "single"
+            ? task
+            : mode === "async single"
+              ? { ...task, async: true }
+              : mode === "chain"
+                ? { chain: [task, task] }
+                : { tasks: [task, task], async: mode === "async parallel" };
+        const execution = fixture.execute(params);
+        await vi.waitFor(() => expect(fixture.children.length).toBeGreaterThan(0));
+        if (mode === "chain") {
+          fixture.children[0].emit("close", 0);
+          await vi.waitFor(() => expect(fixture.children).toHaveLength(2));
+        } else if (mode.includes("parallel")) {
+          await vi.waitFor(() => expect(fixture.children).toHaveLength(2));
+        }
+        const store = (mode.startsWith("async") ? queues : starts).mock.contexts[0];
+        if (!(store instanceof AgentInspectorStore)) throw new Error("Expected inspector store");
+        const runs = store.snapshot();
+        expect(runs).toHaveLength(mode.includes("parallel") || mode === "chain" ? 2 : 1);
+        for (const run of runs) {
+          expect(run.toolCallId).toBe("call-0");
+          expect(run).not.toHaveProperty("parentId");
+        }
+        if (mode === "chain") expect(runs.map((run) => run.chainStep)).toEqual([2, 1]);
+        else for (const run of runs) expect(run.chainStep).toBeUndefined();
+        for (const child of fixture.children) child.emit("close", 0);
+        await execution;
+      } finally {
+        starts.mockRestore();
+        queues.mockRestore();
+      }
+    },
+  );
+
   it.each([
     {
       name: "settings override over frontmatter",
@@ -593,6 +640,7 @@ describe("subagent inspector live bridge", () => {
       resolveCustom = resolve;
     });
     subagentExtension({
+      events: createEventBus(),
       registerTool(tool: any) {
         tools[tool.name] = tool;
       },
@@ -794,6 +842,27 @@ describe("subagent inspector cleanup status", () => {
 });
 
 describe("subagent inspector store", () => {
+  it("retains optional origin and chain step metadata without changing run identity", () => {
+    const store = new AgentInspectorStore();
+    const run = store.start({
+      agent: "worker",
+      task: "Review",
+      toolCallId: "call-1",
+      chainStep: 2,
+    });
+    run.finish("completed");
+    store.queue({ id: "async-123", agent: "worker", task: "Wait", toolCallId: "call-2" });
+    expect(store.snapshot()).toEqual([
+      expect.objectContaining({ id: "async-123", toolCallId: "call-2", status: "queued" }),
+      expect.objectContaining({
+        id: "run-1",
+        toolCallId: "call-1",
+        chainStep: 2,
+        status: "completed",
+      }),
+    ]);
+  });
+
   it("stops only running runs and clears the stopper when a run finishes", () => {
     const store = new AgentInspectorStore();
     const run = store.start({ agent: "worker", task: "Review" });

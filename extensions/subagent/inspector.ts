@@ -48,12 +48,15 @@ export function getInspectorMessageText(message: unknown): string {
 
 export function getInspectorCleanup(result: unknown): "unknown" | undefined {
   if (!isRecord(result) || !isRecord(result.termination)) return undefined;
-  return result.termination.kind === "abort" ? "unknown" : undefined;
+  return result.termination.kind === "abort" || result.termination.kind === "watchdog"
+    ? "unknown"
+    : undefined;
 }
 
 interface InspectorResponse {
   sequence: number;
   text: string;
+  truncated: boolean;
 }
 
 interface InspectorTool {
@@ -63,12 +66,15 @@ interface InspectorTool {
   args: string;
   status: AgentInspectorStatus;
   output: string;
+  truncated: boolean;
 }
 
 interface AgentInspectorRun {
   id: string;
   agent: string;
   task: string;
+  toolCallId?: string;
+  chainStep?: number;
   model?: string;
   modelProvenance?: ModelProvenance;
   thinking?: SubagentThinkingLevel;
@@ -79,6 +85,7 @@ interface AgentInspectorRun {
   responses: InspectorResponse[];
   tools: InspectorTool[];
   activityTruncated: boolean;
+  sourceTextTruncated: boolean;
 }
 
 export interface AgentInspectorRunHandle {
@@ -139,6 +146,8 @@ export class AgentInspectorStore {
   start(options: {
     agent: string;
     task: string;
+    toolCallId?: string;
+    chainStep?: number;
     model?: string;
     thinking?: SubagentThinkingLevel;
   }): AgentInspectorRunHandle {
@@ -149,6 +158,7 @@ export class AgentInspectorStore {
     id: string;
     agent: string;
     task: string;
+    toolCallId?: string;
     model?: string;
     thinking?: SubagentThinkingLevel;
   }): AgentInspectorRunHandle {
@@ -156,7 +166,14 @@ export class AgentInspectorStore {
   }
 
   private createRun(
-    options: { agent: string; task: string; model?: string; thinking?: SubagentThinkingLevel },
+    options: {
+      agent: string;
+      task: string;
+      toolCallId?: string;
+      chainStep?: number;
+      model?: string;
+      thinking?: SubagentThinkingLevel;
+    },
     id: string,
     status: AgentInspectorStatus,
   ): AgentInspectorRunHandle {
@@ -164,6 +181,8 @@ export class AgentInspectorStore {
       id,
       agent: boundedTail(options.agent, 256),
       task: boundedTail(options.task, 4_000),
+      ...(options.toolCallId !== undefined ? { toolCallId: options.toolCallId } : {}),
+      ...(options.chainStep !== undefined ? { chainStep: options.chainStep } : {}),
       model: options.model,
       thinking: options.thinking,
       status,
@@ -171,6 +190,7 @@ export class AgentInspectorStore {
       responses: [],
       tools: [],
       activityTruncated: false,
+      sourceTextTruncated: options.agent.length > 256 || options.task.length > 4_000,
     };
     this.runs.set(run.id, run);
     this.notify();
@@ -180,7 +200,7 @@ export class AgentInspectorStore {
     const isTracked = () => this.runs.get(run.id) === run;
     const message = () => {
       if (!activeMessage) {
-        activeMessage = { sequence: ++activitySequence, text: "" };
+        activeMessage = { sequence: ++activitySequence, text: "", truncated: false };
         run.responses.push(activeMessage);
       }
       return activeMessage;
@@ -221,6 +241,7 @@ export class AgentInspectorStore {
       const tool = run.tools.find((item) => item.id === id);
       if (!tool) return;
       tool.output = boundedTail(output, 8_000);
+      tool.truncated = output.length > 8_000;
       if (status) tool.status = status;
       publish();
     };
@@ -250,25 +271,31 @@ export class AgentInspectorStore {
         if (!isActive()) return;
         run.responses = [];
         activeMessage = undefined;
-        message().text = boundedTail(text, MAX_TEXT_CHARS);
+        const current = message();
+        current.text = boundedTail(text, MAX_TEXT_CHARS);
+        current.truncated = text.length > MAX_TEXT_CHARS;
         activeMessage = undefined;
         publish();
       },
       messageStart: (text = "") => {
         if (!isActive()) return;
         activeMessage = undefined;
-        message().text = boundedTail(text, MAX_TEXT_CHARS);
+        const current = message();
+        current.text = boundedTail(text, MAX_TEXT_CHARS);
+        current.truncated = text.length > MAX_TEXT_CHARS;
         publish();
       },
       appendText: (delta) => {
         if (!isActive() || !delta) return;
         const current = message();
+        current.truncated ||= current.text.length + delta.length > MAX_TEXT_CHARS;
         current.text = boundedTail(current.text + delta, MAX_TEXT_CHARS);
         publish();
       },
       messageEnd: (text) => {
         if (!isActive()) return;
         const current = message();
+        if (text) current.truncated = text.length > MAX_TEXT_CHARS;
         current.text = boundedTail(text || current.text, MAX_TEXT_CHARS);
         activeMessage = undefined;
         publish();
@@ -284,6 +311,7 @@ export class AgentInspectorStore {
             args: boundedArgs(args),
             status: "running",
             output: "",
+            truncated: false,
           });
         }
         publish();

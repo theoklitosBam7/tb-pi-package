@@ -321,10 +321,15 @@ describe("Pi 1.5 parent and child RPC contract", () => {
       expect(getVisibleReports(finalParentCall)).toEqual(reportMarkers);
       expect(finalParentCall.terminalVisible).toBe(true);
 
-      const parentModelCallCountAtSettlement = getParentModelCalls(project).length;
+      const parentModelCallsAtSettlement = getParentModelCalls(project);
+      const parentModelCallCountAtSettlement = parentModelCallsAtSettlement.length;
       const finalReplyCountAtSettlement = rpc.records.filter(isFinalParentReply).length;
+      // Child model completion can precede artifact writing and terminal notification delivery.
+      // Waiting calls before delivery are valid; another terminal-aware call is not.
+      expect(parentModelCallsAtSettlement.filter((call) => call.terminalVisible === true)).toEqual([
+        finalParentCall,
+      ]);
       await new Promise((resolve) => setTimeout(resolve, 250));
-      expect(parentModelCallCountAtSettlement).toBe(parentModelCallsWhileSecondToolIsActive + 2);
       expect(finalReplyCountAtSettlement).toBe(1);
       expect(getParentModelCalls(project)).toHaveLength(parentModelCallCountAtSettlement);
       expect(rpc.records.filter(isFinalParentReply)).toHaveLength(finalReplyCountAtSettlement);

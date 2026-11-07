@@ -1,3 +1,4 @@
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -31,9 +32,11 @@ function createProject(): string {
 function registerSubagentTools(
   events: Record<string, (...args: any[]) => unknown> = {},
   notifications: Array<Record<string, any>> = [],
+  eventBus = createEventBus(),
 ): Record<string, any> {
   const tools: Record<string, any> = {};
   subagentExtension({
+    events: eventBus,
     getThinkingLevel: () => undefined,
     on(event: string, handler: (...args: any[]) => unknown) {
       events[event] = handler;
@@ -190,6 +193,91 @@ describe("asynchronous subagent process integration", () => {
       expect(parseToolText(completed).run?.state?.kind).toBe("completed");
     });
   }, 10_000);
+
+  it.runIf(process.platform !== "win32")(
+    "[process integration] publishes cleanup uncertainty after a managed child times out",
+    async () => {
+      const project = createProject();
+      vi.stubEnv("PI_CODING_AGENT_DIR", project);
+      const fixturePath = path.join(project, "silent-child.cjs");
+      fs.writeFileSync(fixturePath, "process.stdin.resume();\n");
+      const { spawn: realSpawn } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      vi.mocked(spawn).mockImplementation((_command, _args, options) => {
+        return realSpawn(process.execPath, [fixturePath], options) as never;
+      });
+      const events: Record<string, (...args: any[]) => unknown> = {};
+      const eventBus = createEventBus();
+      const publications: unknown[] = [];
+      eventBus.on("workbench.inspection.v1.publish", (value) => publications.push(value));
+      const tools = registerSubagentTools(events, [], eventBus);
+      const context = {
+        cwd: project,
+        hasUI: false,
+        sessionManager: {
+          getSessionFile: () => path.join(project, "session.jsonl"),
+          getSessionId: () => "managed-timeout-session",
+        },
+      };
+
+      try {
+        const launched = await tools.agent.execute(
+          "async-timeout",
+          {
+            async: true,
+            agent: "worker",
+            task: "Stay silent until the watchdog expires",
+            agentScope: "project",
+            confirmProjectAgents: false,
+            watchdog: { idleSeconds: null, toolSeconds: null, taskSeconds: 1 },
+          },
+          undefined,
+          undefined,
+          context,
+        );
+        const runId = parseToolText(launched).runs?.[0]?.id;
+        expect(typeof runId).toBe("string");
+        await vi.waitFor(
+          async () => {
+            const status = await tools.agent_status.execute(
+              "managed-timeout-status",
+              { runId },
+              undefined,
+              undefined,
+              context,
+            );
+            expect(parseToolText(status).run?.state).toMatchObject({
+              kind: "timed-out",
+              result: { value: { termination: { kind: "watchdog", cleanup: "unknown" } } },
+            });
+          },
+          { timeout: 10_000 },
+        );
+        eventBus.emit("workbench.inspection.v1.request", {
+          version: 1,
+          kind: "attach",
+          requestId: "managed-timeout-snapshot",
+          generation: "managed-timeout-generation",
+        });
+        expect(publications).toEqual([
+          expect.objectContaining({
+            kind: "snapshot",
+            activities: [
+              expect.objectContaining({
+                id: runId,
+                toolCallId: "async-timeout",
+                state: "timed-out",
+                cleanup: "unknown",
+              }),
+            ],
+          }),
+        ]);
+      } finally {
+        await events.session_shutdown();
+      }
+    },
+    15_000,
+  );
 
   it.runIf(process.platform !== "win32")(
     "[process integration] completes A while B reports, receives steering, and stays cancellable",

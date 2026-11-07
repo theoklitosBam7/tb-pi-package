@@ -10,6 +10,8 @@ Use Up/Down or Page Up/Page Down to scroll. Home shows the start; End follows ne
 
 The inspector runs in interactive TUI mode only. It replaces the input area below the transcript while open. This keeps image previews out of the inspector's text. Closing it restores the input area.
 
+Compatible hosts can subscribe to [portable inspection](portable-inspection.md) for a bounded, read-only view of agent activity. That contract does not provide child controls or artifact access. It does not change the terminal inspector or the subagent tool and result contracts.
+
 The inspector shows asynchronous runs managed by the current session. The list keeps active runs and up to 50 completed runs in memory. Long output is truncated with a notice. Reloading or leaving the session clears this history; result files are unchanged. `/agents` still browses agent definitions.
 
 For asynchronous runs, use `agent_status` to see queued work, reports, message outcomes, and terminal results. Use `agent_send` to send a steering or follow-up message, and `agent_cancel` to stop a run. The parent receives explicit reports and terminal notifications as the runs progress. While a parent run is active, Pi makes each notification available at a safe agent-loop boundary. This does not interrupt an active model request or tool call. An event can start a turn when the parent is idle. The status record confirms stored events; it does not confirm that the parent model read or acted on them. A `completed` status reports child execution. Review the artifact against the task to assess the work.
