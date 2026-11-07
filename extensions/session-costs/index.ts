@@ -84,7 +84,30 @@ export function collectSessionUsage(entries: readonly SessionEntry[]): SessionUs
     if (usage) addUsageTotals(report.main, usage);
   };
 
+  const asyncRunIds = new Set<string>();
+
   for (const entry of entries) {
+    if (entry.type === "custom_message" && entry.customType === "subagent-result") {
+      const details = entry.details;
+      if (typeof details !== "object" || details === null || Array.isArray(details)) continue;
+      const runId = "runId" in details ? details.runId : undefined;
+      if (typeof runId !== "string" || asyncRunIds.has(runId)) continue;
+
+      const subagentUsage = getPersistedSubagentUsage({
+        ...details,
+        projectAgentsDir: "projectAgentsDir" in details ? details.projectAgentsDir : null,
+      });
+      if (!subagentUsage.recognized) continue;
+
+      asyncRunIds.add(runId);
+      addUsageTotals(report.subagents, subagentUsage.totals);
+      report.subagentRuns += subagentUsage.runs;
+      for (const warning of subagentUsage.warnings) {
+        if (!report.warnings.includes(warning)) report.warnings.push(warning);
+      }
+      continue;
+    }
+
     if (entry.type === "usage") {
       addMainUsage(entry.usage);
       continue;

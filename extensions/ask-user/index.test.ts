@@ -358,6 +358,8 @@ describe("ask_user", () => {
         expanded: false,
         showImages: false,
         isError: false,
+        keyText: () => "",
+        keyHint: () => "",
       },
     );
 

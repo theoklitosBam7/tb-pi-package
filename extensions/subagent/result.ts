@@ -67,6 +67,16 @@ export interface ModelProvenance {
   response: string[];
 }
 
+export function formatModelProvenance(provenance: ModelProvenance): string[] {
+  return [
+    `Requested selection: ${provenance.requested ?? "not specified"}`,
+    `Resolved selections: ${provenance.resolved.map((model) => model ?? "child default").join(", ") || "none"}`,
+    `Attempted selections: ${provenance.attempted.map((model) => model ?? "child default").join(", ") || "none"}`,
+    `Observed dispatch: ${provenance.dispatch.join(", ") || "not observed"}`,
+    `Provider response model ID: ${provenance.response.join(", ") || "not supplied by Pi"}`,
+  ];
+}
+
 interface SingleResultData {
   agent: string;
   agentSource: "user" | "project" | "unknown";
@@ -159,13 +169,7 @@ function formatArtifactMarkdown(options: {
     `- Status: ${options.status}`,
     `- Model: ${options.model ?? "unknown"}`,
     ...(options.modelProvenance
-      ? [
-          `- Requested selection: ${options.modelProvenance.requested ?? "not specified"}`,
-          `- Resolved selections: ${options.modelProvenance.resolved.map((model) => model ?? "child default").join(", ") || "none"}`,
-          `- Attempted selections: ${options.modelProvenance.attempted.map((model) => model ?? "child default").join(", ") || "none"}`,
-          `- Observed dispatch: ${options.modelProvenance.dispatch.join(", ") || "unknown"}`,
-          `- Provider-reported response model: ${options.modelProvenance.response.join(", ") || "unknown"}`,
-        ]
+      ? formatModelProvenance(options.modelProvenance).map((line) => `- ${line}`)
       : []),
     `- Thinking: ${options.thinkingLabel}`,
     `- Exit code: ${options.exitCode}`,
