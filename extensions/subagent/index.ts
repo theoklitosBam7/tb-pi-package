@@ -19,7 +19,6 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
-import { StringEnum } from "@earendil-works/pi-ai";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -160,6 +159,13 @@ type WatchdogConfig = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringEnumSchema<const Values extends Record<string, string>>(
+  values: Values,
+  options?: { description?: string; default?: Values[keyof Values] },
+) {
+  return { ...Type.Enum(values, options), type: "string" as const };
 }
 
 function getMessageLifecycleKey(value: unknown, allowPending = false): string | undefined {
@@ -1336,8 +1342,17 @@ async function runSingleAgent({
   }
 }
 
-const ThinkingInput = StringEnum(
-  ["off", "minimal", "low", "medium", "high", "xhigh", "max", "inherit"] as const,
+const ThinkingInput = stringEnumSchema(
+  {
+    off: "off",
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+    inherit: "inherit",
+  },
   {
     description:
       "Thinking level. 'inherit' uses the parent level. Overrides settings and frontmatter.",
@@ -1349,7 +1364,7 @@ const ModelInput = Type.String({
     "Model as provider/id, or 'inherit' for the parent model. Overrides settings and frontmatter.",
 });
 
-const ModelFallbackInput = StringEnum(["configured", "none"] as const);
+const ModelFallbackInput = stringEnumSchema({ configured: "configured", none: "none" });
 
 const WatchdogLimit = Type.Union([
   Type.Integer({ minimum: 1, maximum: MAX_WATCHDOG_SECONDS }),
@@ -1412,11 +1427,14 @@ const ChainItem = Type.Object({
   watchdog: Type.Optional(WatchdogInput),
 });
 
-const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
-  description:
-    'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
-  default: "user",
-});
+const AgentScopeSchema = stringEnumSchema(
+  { user: "user", project: "project", both: "both" },
+  {
+    description:
+      'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
+    default: "user",
+  },
+);
 
 const SubagentParams = Type.Object({
   async: Type.Optional(
@@ -1551,7 +1569,7 @@ export default function (pi: ExtensionAPI) {
                     }
                   : { runId: event.runId, eventId: event.eventId },
             },
-            { triggerTurn: true, deliverAs: "followUp" },
+            { triggerTurn: true, deliverAs: "steer" },
           );
         },
       });
@@ -1622,7 +1640,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       runId: Type.String(),
       message: Type.String(),
-      mode: StringEnum(["steer", "follow_up"] as const),
+      mode: stringEnumSchema({ steer: "steer", follow_up: "follow_up" }),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const active = await getManager(ctx);
@@ -2037,7 +2055,7 @@ export default function (pi: ExtensionAPI) {
               isError: true,
             };
           }
-          validated.push({ item, agent: resolution.resolvedName });
+          validated.push({ item, agent: resolution.resolvedName, thinking: options.thinking });
         }
         const active = await getManager(ctx);
         if (signal?.aborted)
@@ -2113,12 +2131,17 @@ export default function (pi: ExtensionAPI) {
             details: makeDetails(requestedMode)([]),
             isError: true,
           };
-        for (const run of scheduled.runs) {
+        for (const [index, run] of scheduled.runs.entries()) {
           asyncRunMetadata.set(run.id, {
             agentScope,
             projectAgentsDir: discovery.projectAgentsDir,
           });
-          const handle = inspector.queue({ id: run.id, agent: run.agent, task: run.task });
+          const handle = inspector.queue({
+            id: run.id,
+            agent: run.agent,
+            task: run.task,
+            thinking: validated[index]?.thinking,
+          });
           handle.setStopper(() => {
             void active.manager.cancelRun({ ...active.owner, runId: run.id });
           });

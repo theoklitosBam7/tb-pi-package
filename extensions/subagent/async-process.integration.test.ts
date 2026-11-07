@@ -172,7 +172,7 @@ describe("asynchronous subagent process integration", () => {
     const statusData = parseToolText(status);
 
     expect(statusData.run?.id).toBe(runId);
-    expect(["starting", "running"]).toContain(statusData.run?.state?.kind);
+    expect(statusData.run?.state?.kind).toBe("running");
 
     fs.writeFileSync(releasePath, "release");
     await vi.waitFor(async () => {
@@ -313,7 +313,7 @@ describe("asynchronous subagent process integration", () => {
         await vi.waitFor(async () => {
           const [aRun, bRun] = await Promise.all([statusFor(aRunId!), statusFor(bRunId!)]);
           expect(aRun?.state?.kind).toBe("completed");
-          expect(["starting", "running"]).toContain(bRun?.state?.kind);
+          expect(bRun?.state?.kind).toBe("running");
         });
         const aRun = await statusFor(aRunId);
         expect(aRun?.state?.result?.artifactPath).toBeTruthy();
@@ -334,10 +334,12 @@ describe("asynchronous subagent process integration", () => {
           context,
         );
         expect(parseToolText(sendResult)).toMatchObject({ kind: "accepted", outcome: "pending" });
-        await vi.waitFor(() => expect(fs.existsSync(bSteeredPath)).toBe(true));
-        expect(fs.readFileSync(bSteeredPath, "utf8").trim().split("\n")).toEqual([
-          "Focus on the marker code green.",
-        ]);
+        await vi.waitFor(() => {
+          const messages = fs.existsSync(bSteeredPath)
+            ? fs.readFileSync(bSteeredPath, "utf8").trim().split("\n")
+            : [];
+          expect(messages).toEqual(["Focus on the marker code green."]);
+        });
         await vi.waitFor(async () => {
           const bRun = await statusFor(bRunId!);
           expect(bRun?.messages[0]?.outcome).toBe("accepted-by-child");

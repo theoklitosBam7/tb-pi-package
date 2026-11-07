@@ -7,7 +7,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "./agents.js";
-import type { ModelProvenance } from "./result.js";
+import { formatModelProvenance, type ModelProvenance } from "./result.js";
 
 const MAX_COMPLETED_RUNS = 50;
 const MAX_RUN_CHARS = 64_000;
@@ -583,18 +583,7 @@ export class AgentInspectorComponent {
     if (run.cleanup) lines.push(this.theme.fg("warning", "Cleanup: unknown"));
     if (run.artifactPath) lines.push(`${this.theme.fg("muted", "Artifact:")} ${run.artifactPath}`);
     if (run.modelProvenance) {
-      const provenance = run.modelProvenance;
-      lines.push(`Requested selection: ${provenance.requested ?? "not specified"}`);
-      lines.push(
-        `Resolved selections: ${provenance.resolved.map((model) => model ?? "child default").join(", ") || "none"}`,
-      );
-      lines.push(
-        `Attempted selections: ${provenance.attempted.map((model) => model ?? "child default").join(", ") || "none"}`,
-      );
-      lines.push(`Observed dispatch: ${provenance.dispatch.join(", ") || "unknown"}`);
-      lines.push(
-        `Provider-reported response model: ${provenance.response.join(", ") || "unknown"}`,
-      );
+      lines.push(...formatModelProvenance(run.modelProvenance));
     } else if (run.model) lines.push(`${this.theme.fg("muted", "Model:")} ${run.model}`);
     lines.push(`${this.theme.fg("muted", "Thinking:")} ${getSubagentThinkingLabel(run.thinking)}`);
     lines.push(this.theme.fg("muted", "Task:"), ...run.task.split("\n"));

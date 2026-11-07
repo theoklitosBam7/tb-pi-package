@@ -6,6 +6,7 @@ import { createServer, connect, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { isRecord } from "./is-record.js";
 
 const MAX_REPORT_BYTES = 8 * 1024;
 const MAX_FRAME_BYTES = MAX_REPORT_BYTES + 1024;
@@ -24,10 +25,6 @@ export type ReportServer = {
   environment: Record<string, string>;
   close(): Promise<void>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function sendJson(socket: Socket, response: ReportDecision): void {
   socket.end(`${JSON.stringify(response)}\n`);

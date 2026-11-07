@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   KeybindingsManager,
@@ -96,7 +97,7 @@ describe("subagent inspector registration", () => {
   });
 });
 
-function executionFixture() {
+function executionFixture(options: { parentThinking?: string } = {}) {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "inspector-integration-"));
   cleanup.push(() => fs.rmSync(project, { recursive: true, force: true }));
   vi.stubEnv("PI_CODING_AGENT_DIR", project);
@@ -108,12 +109,40 @@ function executionFixture() {
   );
   const children: Array<ReturnType<typeof child>> = [];
   function child() {
+    const stdout = new EventEmitter();
+    const stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        const command: unknown = JSON.parse(String(chunk));
+        if (
+          typeof command === "object" &&
+          command !== null &&
+          "type" in command &&
+          command.type === "prompt" &&
+          "id" in command &&
+          typeof command.id === "string"
+        ) {
+          stdout.emit(
+            "data",
+            `${JSON.stringify({
+              type: "response",
+              id: command.id,
+              command: "prompt",
+              success: true,
+              data: { disposition: "started" },
+            })}\n`,
+          );
+          stdout.emit("data", `${JSON.stringify({ type: "agent_settled", aborted: false })}\n`);
+        }
+        callback();
+      },
+    });
     return Object.assign(new EventEmitter(), {
-      stdout: new EventEmitter(),
+      stdout,
       stderr: new EventEmitter(),
       kill: vi.fn(),
+      stdin,
       send(event: unknown) {
-        this.stdout.emit("data", `${JSON.stringify(event)}\n`);
+        stdout.emit("data", `${JSON.stringify(event)}\n`);
       },
     });
   }
@@ -126,7 +155,12 @@ function executionFixture() {
   const commands: Record<string, any> = {};
   const shortcuts: Record<string, any> = {};
   const hooks: Record<string, () => void> = {};
+  const notifications: unknown[] = [];
   subagentExtension({
+    getThinkingLevel: () => options.parentThinking,
+    sendMessage(message: unknown) {
+      notifications.push(message);
+    },
     registerTool(tool: any) {
       tools[tool.name] = tool;
     },
@@ -171,6 +205,8 @@ function executionFixture() {
     commands,
     shortcuts,
     hooks,
+    notifications,
+    tools,
     views,
     ctx,
     renders,
@@ -187,6 +223,106 @@ function executionFixture() {
 }
 
 describe("subagent inspector live bridge", () => {
+  it.each([
+    {
+      name: "settings override over frontmatter",
+      frontmatterThinking: "high",
+      settingsThinking: "low",
+      expectedLabel: "low",
+      expectedLaunchThinking: "low",
+    },
+    {
+      name: "explicit input override",
+      frontmatterThinking: "high",
+      settingsThinking: "low",
+      inputThinking: "medium",
+      expectedLabel: "medium",
+      expectedLaunchThinking: "medium",
+    },
+    {
+      name: "parent inheritance",
+      frontmatterThinking: "high",
+      settingsThinking: "low",
+      parentThinking: "minimal",
+      inputThinking: "inherit",
+      expectedLabel: "minimal",
+      expectedLaunchThinking: "minimal",
+    },
+    {
+      name: "frontmatter setting",
+      frontmatterThinking: "high",
+      expectedLabel: "high",
+      expectedLaunchThinking: "high",
+    },
+    {
+      name: "child default",
+      expectedLabel: "child default (no explicit level passed)",
+    },
+  ])("shows the resolved thinking level for $name", async (scenario) => {
+    const fixture = executionFixture({ parentThinking: scenario.parentThinking });
+    const frontmatterThinking = scenario.frontmatterThinking
+      ? `thinking: ${scenario.frontmatterThinking}\n`
+      : "";
+    fs.writeFileSync(
+      path.join(fixture.project, ".pi", "agents", "worker.md"),
+      `---\nname: worker\ndescription: Test worker\n${frontmatterThinking}---\n`,
+    );
+    if (scenario.settingsThinking) {
+      fs.writeFileSync(
+        path.join(fixture.project, "settings.json"),
+        JSON.stringify({
+          subagents: { agentOverrides: { worker: { thinking: scenario.settingsThinking } } },
+        }),
+      );
+    }
+
+    const execution = fixture.execute({
+      async: true,
+      agent: "worker",
+      task: "Review",
+      thinking: scenario.inputThinking,
+    });
+    await vi.waitFor(() => expect(fixture.children).toHaveLength(1));
+    const launchResult = await execution;
+    const runId = launchResult.content
+      .find((item: { text?: string }) => item.text)
+      ?.text?.match(/"id":"([^"]+)"/)?.[1];
+    if (!runId) throw new Error("Expected the async launch to return a run ID");
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    if (!spawnCall || !Array.isArray(spawnCall[1])) {
+      throw new Error("Expected child launch arguments");
+    }
+    if (scenario.expectedLaunchThinking) {
+      expect(spawnCall[1]).toEqual(
+        expect.arrayContaining(["--thinking", scenario.expectedLaunchThinking]),
+      );
+    } else {
+      expect(spawnCall[1]).not.toContain("--thinking");
+    }
+
+    const open = fixture.commands["agent-inspector"].handler("", fixture.ctx);
+    fixture.views[0].handleInput("\r");
+    expect(fixture.output()).toContain(`Thinking: ${scenario.expectedLabel}`);
+
+    fixture.children[0].emit("close", 0);
+    await vi.waitFor(() => expect(fixture.notifications).not.toHaveLength(0));
+    await vi.waitFor(() => expect(fixture.output()).toContain("Artifact:"));
+    expect(fixture.output()).toContain("completed");
+    expect(fixture.output()).toContain("Provider response model ID: not supplied by Pi");
+    const artifactPath = JSON.stringify(fixture.notifications[0]).match(
+      /"outputPath":"([^"]+)"/,
+    )?.[1];
+    if (!artifactPath) throw new Error("Expected the completed run's artifact path");
+    expect(fs.readFileSync(artifactPath, "utf8")).toContain(
+      `- Thinking: ${scenario.expectedLabel}`,
+    );
+
+    fixture.views[0].handleInput("\x1b");
+    fixture.views[0].handleInput("\x1b");
+    await open;
+  });
+
   it("opens once through command or shortcut, reopens, and closes on shutdown without cancelling runs", async () => {
     const fixture = executionFixture();
     const execution = fixture.execute({ agent: "worker", task: "Review" });
@@ -696,6 +832,25 @@ describe("subagent inspector store", () => {
 });
 
 describe("subagent inspector TUI", () => {
+  it("shows a resolved launch setting while a run is still queued", () => {
+    const store = new AgentInspectorStore();
+    store.queue({
+      id: "queued-thinking",
+      agent: "worker",
+      task: "Review",
+      thinking: "low",
+    });
+    const { component } = inspectorView(store);
+
+    component.handleInput("\r");
+    const text = component.render(100).join("\n");
+
+    expect(text).toContain("queued");
+    expect(text).toContain("Thinking: low");
+    expect(text).not.toContain("running");
+    component.dispose();
+  });
+
   it("does not show cleanup uncertainty for a queued run canceled before start", () => {
     const store = new AgentInspectorStore();
     const run = store.queue({ id: "queued-123", agent: "worker", task: "Waiting" });
@@ -741,16 +896,33 @@ describe("subagent inspector TUI", () => {
       requested: "inherit",
       resolved: ["test/one"],
       attempted: ["test/one"],
-      dispatch: ["other/two"],
-      response: ["version-3"],
+      dispatch: ["other/two", "other/three"],
+      response: [],
     });
     const { component } = inspectorView(store, 30, 100);
     component.handleInput("\r");
     const text = component.render(100).join("\n");
     expect(text).toContain("Requested selection: inherit");
     expect(text).toContain("Attempted selections: test/one");
-    expect(text).toContain("Observed dispatch: other/two");
-    expect(text).toContain("Provider-reported response model: version-3");
+    expect(text).toContain("Observed dispatch: other/two, other/three");
+    expect(text).toContain("Provider response model ID: not supplied by Pi");
+    component.dispose();
+  });
+
+  it("labels absent dispatch separately from a supplied provider response ID", () => {
+    const store = new AgentInspectorStore();
+    const run = store.start({ agent: "worker", task: "Review" });
+    run.setModelProvenance({
+      resolved: ["test/one"],
+      attempted: ["test/one"],
+      dispatch: [],
+      response: ["provider-version"],
+    });
+    const { component } = inspectorView(store, 30, 100);
+    component.handleInput("\r");
+    const text = component.render(100).join("\n");
+    expect(text).toContain("Observed dispatch: not observed");
+    expect(text).toContain("Provider response model ID: provider-version");
     component.dispose();
   });
   it("stops a running run only from its detail view", () => {
@@ -1094,7 +1266,7 @@ describe("subagent inspector TUI", () => {
     expect(rows[0]).toContain("↓");
     const head = bodyOf(rows).map(inner).join("\n");
     expect(head).toContain("Model: test/model");
-    expect(head).toContain("Thinking: Pi default");
+    expect(head).toContain("Thinking: child default (no explicit level passed)");
     expect(head).toContain("Task:");
     expect(head).toContain("Response:");
     component.dispose();

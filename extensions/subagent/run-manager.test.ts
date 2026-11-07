@@ -32,6 +32,8 @@ describe("RunManager", () => {
     const gate = deferred<{ artifactPath: string }>();
     const first = await manager.scheduleBatch({ ...owner, jobs: [job("one", () => gate.promise)] });
     expect(first.kind).toBe("scheduled");
+    if (first.kind !== "scheduled") throw new Error("Expected scheduled run");
+    expect(first.runs[0].state.kind).toBe("running");
 
     const second = await manager.scheduleBatch({ ...owner, jobs: [job("two")] });
     const overflow = await manager.scheduleBatch({ ...owner, jobs: [job("three"), job("four")] });

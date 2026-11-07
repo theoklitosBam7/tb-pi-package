@@ -1,6 +1,5 @@
 export type RunState =
   | { kind: "queued" }
-  | { kind: "starting" }
   | { kind: "running" }
   | { kind: "stopping" }
   | { kind: "completed"; result: RunResult }
@@ -251,7 +250,6 @@ export function createRunManager(options: RunManagerOptions): RunManager {
 
   const runOne = async (run: InternalRun): Promise<void> => {
     if (run.terminal) return;
-    run.state = { kind: "starting" };
     run.state = { kind: "running" };
     const context: RunContext = {
       runId: run.id,

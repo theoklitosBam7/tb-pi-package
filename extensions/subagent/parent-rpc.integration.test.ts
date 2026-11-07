@@ -1,229 +1,120 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  createTemporaryProject,
+  isJsonRecord,
+  readJsonLines,
+  repositoryRoot,
+  startPiRpc,
+  waitForCondition,
+} from "./test-support/pi-rpc-process.js";
 
-const installedPi15Cli =
-  path.join(
-    os.homedir(),
-    ".pi",
-    "agent",
-    "install",
-    "releases",
-    "1.5.0",
-    "node_modules",
-    "@earendil-works",
-    "pi-coding-agent",
-    "dist",
-    "cli.js",
-  );
-const localPi13Cli = path.join(getPackageDir(), "dist", "cli.js");
-const versions = [
-  { version: "1.3.0", cliPath: localPi13Cli },
-  ...(fs.existsSync(installedPi15Cli)
-    ? [{ version: "installed 1.5.0", cliPath: installedPi15Cli }]
-    : []),
-];
-
+const providerFixturePath = path.join(
+  repositoryRoot,
+  "extensions",
+  "subagent",
+  "test-support",
+  "fixtures",
+  "subagent-parent-rpc-provider.mjs",
+);
+const subagentExtensionPath = path.join(repositoryRoot, "extensions", "subagent", "index.ts");
+const reportMarkers = ["rpc-report-one", "rpc-report-two", "rpc-report-three"];
+const finalReplyMarker = "parent-saw-all-subagent-notifications";
 const temporaryDirectories: string[] = [];
 
-type RpcRecord = Record<string, unknown>;
-type ProviderEvent = { process: string; call: number; detail?: string };
+function getProviderEvents(projectDirectory: string, processName: "child" | "parent") {
+  return readJsonLines(path.join(projectDirectory, processName + "-events.jsonl"));
+}
 
-function createFixture(): { project: string; agentDir: string; eventsPath: string } {
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-parent-rpc-"));
+function getParentModelCalls(projectDirectory: string): Record<string, unknown>[] {
+  return getProviderEvents(projectDirectory, "parent").filter(
+    (event) => event.kind === "parent_model_call",
+  );
+}
+
+function getVisibleReports(parentCall: Record<string, unknown>): string[] {
+  if (!Array.isArray(parentCall.visibleReports)) return [];
+  return parentCall.visibleReports.filter((report): report is string => typeof report === "string");
+}
+
+function getSubagentNotifications(rpc: ReturnType<typeof startPiRpc>): Record<string, unknown>[] {
+  return rpc.records.flatMap((record) => {
+    if (record.type !== "message_end" || !isJsonRecord(record.message)) return [];
+    const message = record.message;
+    if (
+      message.role !== "custom" ||
+      (message.customType !== "subagent-report" && message.customType !== "subagent-result")
+    ) {
+      return [];
+    }
+    return [message];
+  });
+}
+
+function isSubagentNotification(
+  record: Record<string, unknown>,
+  customType: "subagent-report" | "subagent-result",
+  contentMarker?: string,
+): boolean {
+  if (record.type !== "message_end" || !isJsonRecord(record.message)) return false;
+  const message = record.message;
+  return (
+    message.role === "custom" &&
+    message.customType === customType &&
+    (contentMarker === undefined ||
+      (typeof message.content === "string" && message.content.includes(contentMarker)))
+  );
+}
+
+function isFinalParentReply(record: Record<string, unknown>): boolean {
+  if (record.type !== "message_end" || !isJsonRecord(record.message)) return false;
+  const message = record.message;
+  return (
+    message.role === "assistant" &&
+    Array.isArray(message.content) &&
+    message.content.some(
+      (part) =>
+        isJsonRecord(part) &&
+        part.type === "text" &&
+        typeof part.text === "string" &&
+        part.text.includes(finalReplyMarker),
+    )
+  );
+}
+
+async function waitForSubagentNotification(
+  rpc: ReturnType<typeof startPiRpc>,
+  projectDirectory: string,
+  customType: "subagent-report" | "subagent-result",
+  contentMarker?: string,
+): Promise<Record<string, unknown>> {
+  try {
+    return await rpc.waitFor((record) => isSubagentNotification(record, customType, contentMarker));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${message}\nChild fixture events: ${JSON.stringify(getProviderEvents(projectDirectory, "child"))}` +
+        `\nParent fixture events: ${JSON.stringify(getProviderEvents(projectDirectory, "parent"))}`,
+    );
+  }
+}
+
+function createFixture(): { project: string; agentDirectory: string } {
+  const project = createTemporaryProject("subagent-parent-rpc-");
   temporaryDirectories.push(project);
-  const agentDir = path.join(project, "agent-dir");
-  fs.mkdirSync(path.join(agentDir, "extensions"), { recursive: true });
+  const agentDirectory = path.join(project, "agent-dir");
   fs.mkdirSync(path.join(project, ".pi", "agents"), { recursive: true });
+  fs.mkdirSync(agentDirectory, { recursive: true });
   fs.writeFileSync(
     path.join(project, ".pi", "agents", "worker.md"),
     "---\nname: worker\ndescription: Deterministic RPC fixture worker\nmodel: fixture/fixture-model\n---\n",
   );
-  return { project, agentDir, eventsPath: path.join(project, "provider-events.jsonl") };
-}
-
-function writeProviderExtension(options: {
-  extensionPath: string;
-  eventsPath: string;
-  piAiPath: string;
-  busyReleasePath: string;
-  childFirstReportReleasePath: string;
-  childSecondReportReleasePath: string;
-  childFinishReleasePath: string;
-}): void {
-  const source = `
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { createAssistantMessageEventStream } from ${JSON.stringify(options.piAiPath)};
-const eventsPath = ${JSON.stringify(options.eventsPath)};
-const busyReleasePath = ${JSON.stringify(options.busyReleasePath)};
-const childFirstReportReleasePath = ${JSON.stringify(options.childFirstReportReleasePath)};
-const childSecondReportReleasePath = ${JSON.stringify(options.childSecondReportReleasePath)};
-const childFinishReleasePath = ${JSON.stringify(options.childFinishReleasePath)};
-let calls = 0;
-let activeParentCalls = 0;
-function record(processName, call, detail) {
-  fs.appendFileSync(eventsPath, JSON.stringify({ process: processName, call, detail }) + "\\n");
-}
-function waitForFile(filePath) {
-  if (fs.existsSync(filePath)) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const watcher = fs.watch(path.dirname(filePath), (_event, filename) => {
-      if (filename === path.basename(filePath) && fs.existsSync(filePath)) {
-        watcher.close();
-        resolve();
-      }
-    });
-    watcher.once("error", reject);
-    if (fs.existsSync(filePath)) {
-      watcher.close();
-      resolve();
-    }
-  });
-}
-function assistantMessage(model, content, stopReason) {
-  return {
-    role: "assistant", content, api: model.api, provider: model.provider, model: model.id,
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason, timestamp: Date.now(),
-  };
-}
-export default function (pi) {
-  pi.registerProvider("fixture", {
-    api: "openai-completions", baseUrl: "http://127.0.0.1/unused", apiKey: "fixture",
-    models: [{ id: "fixture-model", name: "Fixture Model", reasoning: false, input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 4096, maxTokens: 512 }],
-    streamSimple(model, context) {
-      const stream = createAssistantMessageEventStream();
-      void (async () => {
-        calls += 1;
-        const child = process.env.SUBAGENT_MANAGED_CHILD === "1";
-        const processName = child ? "child" : "parent";
-        if (child) {
-          record(processName, calls, calls === 1 ? process.env.SUBAGENT_REPORT_RUN_ID : undefined);
-          if (calls === 1) {
-            await waitForFile(childFirstReportReleasePath);
-            return finish(stream, model, [{ type: "toolCall", id: "child-report-1", name: "report_to_parent",
-              arguments: { message: "Child report one: ready for parent." } }], "toolUse");
-          }
-          if (calls === 2) {
-            await waitForFile(childSecondReportReleasePath);
-            return finish(stream, model, [{ type: "toolCall", id: "child-report-2", name: "report_to_parent",
-              arguments: { message: "Child report two: parent is busy." } }], "toolUse");
-          }
-          if (calls === 3) {
-            record(processName, calls, "waiting-for-parent-response");
-            await waitForFile(childFinishReleasePath);
-            return finish(stream, model, [{ type: "text", text: "Child accepted the steering message." }], "stop");
-          }
-          if (calls === 4) {
-            const messages = JSON.stringify(context.messages);
-            record(processName, calls, messages);
-            if (!messages.includes("Parent response to report two: continue with the final check.")) {
-              throw new Error("Child did not receive the parent's steering message");
-            }
-            return finish(stream, model, [{ type: "text", text: "Child completed after parent response." }], "stop");
-          }
-          throw new Error("Unexpected child model turn");
-        }
-
-        activeParentCalls += 1;
-        record(processName, calls, JSON.stringify(context.messages));
-        if (activeParentCalls > 1) record(processName, calls, "CONCURRENT_PARENT_MODEL_TURNS");
-        try {
-          if (calls === 1) {
-            return finish(stream, model, [{ type: "toolCall", id: "launch-child", name: "agent",
-              arguments: { async: true, agent: "worker", task: "Send two explicit progress reports, then finish.",
-                agentScope: "project", confirmProjectAgents: false, model: "fixture/fixture-model" } }], "toolUse");
-          }
-          if (calls === 3) {
-            await waitForFile(busyReleasePath);
-            return finish(stream, model, [{ type: "text", text: "Parent busy turn finished." }], "stop");
-          }
-          if (calls === 4) {
-            const reportNotification = context.messages.find((message) =>
-              message.role === "user" &&
-              JSON.stringify(message.content).includes("Child report two: parent is busy.")
-            );
-            const notificationText = typeof reportNotification?.content === "string"
-              ? reportNotification.content
-              : reportNotification?.content.map((part) => part.text ?? "").join(" ") ?? "";
-            const runId = notificationText.match(/Subagent worker \\(([^)]+)\\) report/)?.[1];
-            if (!runId) {
-              throw new Error("Parent report notification did not include the reporting run ID");
-            }
-            record(processName, calls, JSON.stringify({ runId, source: notificationText }));
-            return finish(stream, model, [{ type: "toolCall", id: "respond-to-child", name: "agent_send",
-              arguments: { runId, message: "Parent response to report two: continue with the final check.", mode: "steer" } }], "toolUse");
-          }
-          const text = calls === 2 ? "Child started; parent can wait." : "Parent received report follow-up.";
-          return finish(stream, model, [{ type: "text", text }], "stop");
-        } finally {
-          activeParentCalls -= 1;
-        }
-      })().catch((error) => {
-        const failed = assistantMessage(model, [], "error");
-        failed.errorMessage = String(error);
-        stream.push({ type: "error", reason: "error", error: failed });
-        stream.end();
-      });
-      return stream;
-    },
-  });
-}
-function finish(stream, model, content, stopReason) {
-  const message = assistantMessage(model, content, stopReason);
-  stream.push({ type: "start", partial: { ...message, content: [], stopReason: "pending" } });
-  stream.push({ type: "done", reason: stopReason, message });
-  stream.end();
-}
-`;
-  fs.writeFileSync(options.extensionPath, source);
-}
-
-function readEvents(filePath: string): ProviderEvent[] {
-  if (!fs.existsSync(filePath)) return [];
-  return fs
-    .readFileSync(filePath, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as ProviderEvent);
-}
-
-function startPi(options: {
-  cliPath: string;
-  cwd: string;
-  agentDir: string;
-  extensionPaths: string[];
-}): ReturnType<typeof spawn> {
-  return spawn(
-    process.execPath,
-    [
-      options.cliPath,
-      "--mode",
-      "rpc",
-      "--no-session",
-      "--model",
-      "fixture/fixture-model",
-      ...options.extensionPaths.flatMap((extension) => ["--extension", extension]),
-    ],
-    {
-      cwd: options.cwd,
-      env: {
-        ...process.env,
-        PI_CODING_AGENT_DIR: options.agentDir,
-        PI_CODING_AGENT_SESSION_DIR: path.join(options.agentDir, "sessions"),
-        PI_OFFLINE: "1",
-        PI_SKIP_VERSION_CHECK: "1",
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    },
+  fs.writeFileSync(
+    path.join(agentDirectory, "settings.json"),
+    JSON.stringify({ extensions: [providerFixturePath] }),
   );
+  return { project, agentDirectory };
 }
 
 afterEach(() => {
@@ -232,170 +123,213 @@ afterEach(() => {
   }
 });
 
-describe("real Pi parent/child RPC transport", () => {
-  for (const runtime of versions) {
-    it(`[process integration] ${runtime.version}: idle reports wake the parent and busy reports queue without overlapping turns`, async () => {
-      if (process.platform === "win32") return;
-      const { project, agentDir, eventsPath } = createFixture();
-      const busyReleasePath = path.join(project, "release-parent-busy-turn");
-      const childFirstReportReleasePath = path.join(project, "release-child-first-report");
-      const childSecondReportReleasePath = path.join(project, "release-child-second-report");
-      const childFinishReleasePath = path.join(project, "release-child-finish-turn");
-      const testDirectory = path.dirname(fileURLToPath(import.meta.url));
-      const piAiPath = path.resolve(
-        testDirectory,
-        "../../node_modules/@earendil-works/pi-ai/dist/index.js",
+describe("Pi 1.5 parent and child RPC contract", () => {
+  it("[process integration] delivers child notifications before parent settlement without stale turns", async () => {
+    const { project, agentDirectory } = createFixture();
+    const marker = (name: string) => path.join(project, name);
+    const rpc = startPiRpc({
+      projectDirectory: project,
+      agentDirectory,
+      model: "fixture/fixture-model",
+      extensions: [subagentExtensionPath],
+      environment: { SUBAGENT_PARENT_RPC_DIR: project },
+    });
+
+    try {
+      rpc.send({
+        id: "parent-prompt",
+        type: "prompt",
+        message: "Start the worker and wait for its reports.",
+      });
+      const promptResponse = await rpc.waitFor(
+        (record) => record.type === "response" && record.id === "parent-prompt",
       );
-      const providerPath = path.join(agentDir, "extensions", "fixture-provider.mjs");
-      writeProviderExtension({
-        extensionPath: providerPath,
-        eventsPath,
-        piAiPath,
-        busyReleasePath,
-        childFirstReportReleasePath,
-        childSecondReportReleasePath,
-        childFinishReleasePath,
-      });
-      fs.writeFileSync(
-        path.join(agentDir, "settings.json"),
-        JSON.stringify({ extensions: [providerPath] }),
+      expect(promptResponse).toMatchObject({ success: true, data: { disposition: "started" } });
+      await rpc.waitFor((record) => record.type === "agent_settled");
+      await waitForCondition(
+        () =>
+          getProviderEvents(project, "child").some(
+            (event) =>
+              event.kind === "child_waiting_for_report" && event.report === reportMarkers[0],
+          ),
+        "the child to request its first report release",
       );
-      const extensionPath = path.join(testDirectory, "index.ts");
-      const parent = startPi({
-        cliPath: runtime.cliPath,
-        cwd: project,
-        agentDir,
-        extensionPaths: [extensionPath],
-      });
-      const records: RpcRecord[] = [];
-      let stdoutBuffer = "";
-      let stderr = "";
-      parent.stdout?.setEncoding("utf8");
-      parent.stdout?.on("data", (chunk: string) => {
-        stdoutBuffer += chunk;
-        while (stdoutBuffer.includes("\n")) {
-          const boundary = stdoutBuffer.indexOf("\n");
-          const line = stdoutBuffer.slice(0, boundary);
-          stdoutBuffer = stdoutBuffer.slice(boundary + 1);
-          if (line) records.push(JSON.parse(line) as RpcRecord);
-        }
-      });
-      parent.stderr?.setEncoding("utf8");
-      parent.stderr?.on("data", (chunk: string) => (stderr += chunk));
-      const waitFor = async (predicate: () => boolean): Promise<void> => {
-        try {
-          await expect.poll(predicate, { timeout: 25_000 }).toBe(true);
-        } catch {
-          throw new Error(
-            `Timed out waiting for parent event. stderr: ${stderr}\nRPC: ${JSON.stringify(records)}\nProvider: ${JSON.stringify(readEvents(eventsPath))}`,
-          );
-        }
-      };
-      const send = (record: RpcRecord) => {
-        parent.stdin?.write(`${JSON.stringify(record)}\n`);
-      };
+
+      fs.writeFileSync(marker("release-" + reportMarkers[0]), "release");
+      await waitForSubagentNotification(rpc, project, "subagent-report", reportMarkers[0]);
+      await waitForCondition(
+        () =>
+          getProviderEvents(project, "parent").some(
+            (event) => event.kind === "parent_tool_started",
+          ),
+        "the parent tool to start",
+      );
+      const parentCallsBeforeChildFinishes = getParentModelCalls(project).length;
+
+      await waitForCondition(
+        () =>
+          getProviderEvents(project, "child").some(
+            (event) =>
+              event.kind === "child_waiting_for_report" && event.report === reportMarkers[1],
+          ),
+        "the child to request its second report release",
+      );
+      fs.writeFileSync(marker("release-" + reportMarkers[1]), "release");
+      await waitForCondition(
+        () =>
+          getProviderEvents(project, "child").some(
+            (event) =>
+              event.kind === "child_waiting_for_report" && event.report === reportMarkers[2],
+          ),
+        "the child to request its third report release",
+      );
+      fs.writeFileSync(marker("release-" + reportMarkers[2]), "release");
+      await waitForCondition(
+        () =>
+          getProviderEvents(project, "child").some(
+            (event) => event.kind === "child_waiting_for_finish",
+          ),
+        "the child to finish its reports",
+      );
+
+      const parentEventsWhileToolIsActive = getProviderEvents(project, "parent");
+      expect(getParentModelCalls(project)).toHaveLength(parentCallsBeforeChildFinishes);
+      expect(getSubagentNotifications(rpc).map((notification) => notification.customType)).toEqual([
+        "subagent-report",
+      ]);
+      expect(
+        parentEventsWhileToolIsActive.some(
+          (event) => event.kind === "overlapping_parent_model_turns",
+        ),
+      ).toBe(false);
+
+      fs.writeFileSync(marker("release-parent-tool-1"), "release");
       try {
-        send({
-          id: "parent-prompt",
-          type: "prompt",
-          message: "Start the worker and wait for its reports.",
-        });
-        await waitFor(() => records.some((record) => record.type === "agent_settled"));
-        await waitFor(() =>
-          readEvents(eventsPath).some((event) => event.process === "child" && event.call === 1),
+        await waitForCondition(
+          () =>
+            getParentModelCalls(project).some((call) =>
+              getVisibleReports(call).includes(reportMarkers[1]),
+            ),
+          "the parent model to receive the second child report after its first tool call",
+          5_000,
         );
-
-        // Emit the first report only after the parent is idle, so it tests an idle wake-up.
-        fs.writeFileSync(childFirstReportReleasePath, "release");
-        await waitFor(() =>
-          readEvents(eventsPath).some(
-            (event) =>
-              event.process === "parent" &&
-              event.call === 3 &&
-              event.detail?.includes("Child report one: ready for parent."),
-          ),
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `${message}\nParent fixture events: ${JSON.stringify(getProviderEvents(project, "parent"))}`,
         );
-
-        // Hold the child after its first report until the parent has started the wake-up turn.
-        await waitFor(() =>
-          readEvents(eventsPath).some((event) => event.process === "child" && event.call === 2),
-        );
-        fs.writeFileSync(childSecondReportReleasePath, "release");
-        await waitFor(() =>
-          readEvents(eventsPath).some((event) => event.process === "parent" && event.call === 3),
-        );
-
-        // Hold the parent's report-triggered turn open while the child reports again.
-        await waitFor(() =>
-          readEvents(eventsPath).some((event) => event.process === "child" && event.call === 3),
-        );
-        const parentCallCountWhileBusy = readEvents(eventsPath).filter(
-          (event) => event.process === "parent",
-        ).length;
-        expect(
-          readEvents(eventsPath).some((event) => event.detail === "CONCURRENT_PARENT_MODEL_TURNS"),
-        ).toBe(false);
-        expect(parentCallCountWhileBusy).toBe(3);
-
-        fs.writeFileSync(busyReleasePath, "release");
-        await waitFor(() =>
-          readEvents(eventsPath).some((event) => event.process === "parent" && event.call === 4),
-        );
-        const events = readEvents(eventsPath);
-        expect(
-          events.some(
-            (event) =>
-              event.process === "parent" &&
-              event.call === 4 &&
-              event.detail?.includes("Child report two: parent is busy."),
-          ),
-        ).toBe(true);
-        expect(events.some((event) => event.detail === "CONCURRENT_PARENT_MODEL_TURNS")).toBe(
-          false,
-        );
-        await waitFor(() =>
-          readEvents(eventsPath).some((event) => event.process === "child" && event.call === 3),
-        );
-        const parentResponse = readEvents(eventsPath).find(
-          (event) =>
-            event.process === "parent" &&
-            event.call === 4 &&
-            event.detail?.includes('"source":"Subagent worker '),
-        );
-        expect(parentResponse?.detail).toContain("Child report two: parent is busy.");
-        const childRunId = readEvents(eventsPath).find(
-          (event) => event.process === "child" && event.call === 1,
-        )?.detail;
-        expect(parentResponse?.detail).toContain(`"runId":"${childRunId}"`);
-        fs.writeFileSync(childFinishReleasePath, "release");
-        await waitFor(() =>
-          readEvents(eventsPath).some(
-            (event) =>
-              event.process === "child" &&
-              event.call === 4 &&
-              event.detail?.includes(
-                "Parent response to report two: continue with the final check.",
-              ),
-          ),
-        );
-        await waitFor(() =>
-          records.some(
-            (record) =>
-              record.type === "message_end" &&
-              typeof record.message === "object" &&
-              record.message !== null &&
-              "content" in record.message &&
-              JSON.stringify(record.message.content).includes("completed ("),
-          ),
-        );
-        expect(stderr).not.toContain("Error");
-      } finally {
-        if (parent.exitCode === null && parent.signalCode === null) parent.kill("SIGTERM");
-        await new Promise<void>((resolve) => {
-          if (parent.exitCode !== null || parent.signalCode !== null) resolve();
-          else parent.once("close", () => resolve());
-        });
       }
-    }, 60_000);
-  }
+      const resumedParentCall = getParentModelCalls(project).find((call) =>
+        getVisibleReports(call).includes(reportMarkers[1]),
+      );
+      if (!resumedParentCall)
+        throw new Error("The parent did not receive the second child report.");
+      expect(getVisibleReports(resumedParentCall)).toContain(reportMarkers[1]);
+      await waitForCondition(
+        () =>
+          getProviderEvents(project, "parent").some(
+            (event) => event.kind === "parent_tool_started" && event.call === 2,
+          ),
+        "the parent to continue its active task with a second tool call",
+        5_000,
+      );
+      const parentEventsAfterReport = getProviderEvents(project, "parent");
+      const resumedCallIndex = parentEventsAfterReport.findIndex(
+        (event) =>
+          event.kind === "parent_model_call" && getVisibleReports(event).includes(reportMarkers[1]),
+      );
+      const secondToolStartIndex = parentEventsAfterReport.findIndex(
+        (event) => event.kind === "parent_tool_started" && event.call === 2,
+      );
+      expect(resumedCallIndex).toBeGreaterThanOrEqual(0);
+      expect(secondToolStartIndex).toBeGreaterThan(resumedCallIndex);
+      expect(rpc.records.some(isFinalParentReply)).toBe(false);
+
+      const parentModelCallsWhileSecondToolIsActive = getParentModelCalls(project).length;
+      fs.writeFileSync(marker("release-child-finish"), "release");
+      await waitForCondition(
+        () => getProviderEvents(project, "child").some((event) => event.kind === "child_finished"),
+        "the child model to finish",
+      );
+      expect(getParentModelCalls(project)).toHaveLength(parentModelCallsWhileSecondToolIsActive);
+      expect(rpc.records.some(isFinalParentReply)).toBe(false);
+
+      fs.writeFileSync(marker("release-parent-tool-2"), "release");
+
+      const finalReplyRecord = await rpc.waitFor(isFinalParentReply, 25_000);
+      const finalReplyIndex = rpc.records.indexOf(finalReplyRecord);
+      await waitForSubagentNotification(rpc, project, "subagent-report", reportMarkers[1]);
+      await waitForSubagentNotification(rpc, project, "subagent-report", reportMarkers[2]);
+      const terminalNotification = await waitForSubagentNotification(
+        rpc,
+        project,
+        "subagent-result",
+      );
+      const terminalNotificationIndex = rpc.records.indexOf(terminalNotification);
+      expect(terminalNotificationIndex).toBeLessThan(finalReplyIndex);
+      await rpc.waitFor(
+        (record) =>
+          record.type === "agent_settled" &&
+          rpc.records.indexOf(record) > Math.max(finalReplyIndex, terminalNotificationIndex),
+        25_000,
+      );
+
+      const notifications = getSubagentNotifications(rpc);
+      const reports = notifications.filter(
+        (notification) => notification.customType === "subagent-report",
+      );
+      const terminalResults = notifications.filter(
+        (notification) => notification.customType === "subagent-result",
+      );
+      const reportIndices = rpc.records.flatMap((record, index) =>
+        isSubagentNotification(record, "subagent-report") ? [index] : [],
+      );
+      expect(reportIndices).toHaveLength(reports.length);
+      expect(reportIndices.every((index) => index < finalReplyIndex)).toBe(true);
+      const receivedMarkers = reports.map((report) =>
+        reportMarkers.find(
+          (markerText) => typeof report.content === "string" && report.content.includes(markerText),
+        ),
+      );
+
+      expect(receivedMarkers).toEqual(reportMarkers);
+      expect(notifications.map((notification) => notification.customType)).toEqual([
+        "subagent-report",
+        "subagent-report",
+        "subagent-report",
+        "subagent-result",
+      ]);
+      expect(terminalResults).toHaveLength(1);
+      const reportDetails = reports.map((report) =>
+        isJsonRecord(report.details) ? report.details : {},
+      );
+      const runIds = reportDetails.map((details) => details.runId);
+      const eventIds = reportDetails.map((details) => details.eventId);
+      expect(runIds.every((runId) => typeof runId === "string")).toBe(true);
+      expect(new Set(runIds).size).toBe(1);
+      expect(eventIds.every((eventId) => typeof eventId === "string")).toBe(true);
+      expect(new Set(eventIds).size).toBe(reportMarkers.length);
+      const terminalDetails = isJsonRecord(terminalResults[0].details)
+        ? terminalResults[0].details
+        : {};
+      expect(terminalDetails.runId).toBe(runIds[0]);
+
+      const finalParentCall = [...getParentModelCalls(project)]
+        .reverse()
+        .find((call) => call.childFinished === true);
+      if (!finalParentCall) throw new Error("The parent did not resume after the child finished.");
+      expect(getVisibleReports(finalParentCall)).toEqual(reportMarkers);
+      expect(finalParentCall.terminalVisible).toBe(true);
+
+      const parentModelCallCountAtSettlement = getParentModelCalls(project).length;
+      const finalReplyCountAtSettlement = rpc.records.filter(isFinalParentReply).length;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(parentModelCallCountAtSettlement).toBe(parentModelCallsWhileSecondToolIsActive + 2);
+      expect(finalReplyCountAtSettlement).toBe(1);
+      expect(getParentModelCalls(project)).toHaveLength(parentModelCallCountAtSettlement);
+      expect(rpc.records.filter(isFinalParentReply)).toHaveLength(finalReplyCountAtSettlement);
+    } finally {
+      await rpc.close();
+    }
+  }, 60_000);
 });

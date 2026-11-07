@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Writable } from "node:stream";
+import { isRecord } from "./is-record.js";
 
 export type RpcCommand =
   | { type: "prompt"; message: string; streamingBehavior?: "steer" | "followUp" }
@@ -36,10 +37,6 @@ type PendingResponse = {
   reject(error: Error): void;
   timeout: ReturnType<typeof setTimeout>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function createRpcPeer(options: {
   stdin: Writable;

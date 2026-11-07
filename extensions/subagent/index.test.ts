@@ -292,7 +292,7 @@ describe("writeResultArtifact", () => {
       expect(artifact).toContain("- Status: completed");
       expect(artifact).toContain("- Model: anthropic/claude-sonnet-4-5");
       expect(artifact).not.toContain("Observed dispatch:");
-      expect(artifact).not.toContain("Provider-reported response model:");
+      expect(artifact).not.toContain("Provider response model ID:");
       expect(artifact).toContain("- Thinking: medium");
       expect(artifact).toContain("- Task: parallel item 2");
       expect(artifact).toContain("## Result\n\n# Finding\n\nComplete output.");
@@ -338,7 +338,7 @@ describe("writeResultArtifact", () => {
 
       const artifact = fs.readFileSync(outputPath, "utf8");
       expect(artifact).toContain("- Status: aborted");
-      expect(artifact).toContain("- Thinking: Pi default");
+      expect(artifact).toContain("- Thinking: child default (no explicit level passed)");
       expect(artifact).toContain("- Stop reason: aborted");
       expect(artifact).toContain("## Result\n\npartial response");
       expect(artifact).toContain(
@@ -900,6 +900,9 @@ describe("subagent output limits", () => {
         dispatch: ["provider/first", "provider/second"],
         response: [],
       });
+      const artifact = fs.readFileSync(result.details.results[0].outputPath, "utf8");
+      expect(artifact).toContain("Observed dispatch: provider/first, provider/second");
+      expect(artifact).toContain("Provider response model ID: not supplied by Pi");
     } finally {
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
@@ -972,7 +975,7 @@ describe("subagent output limits", () => {
         });
         const artifact = fs.readFileSync(item.outputPath, "utf8");
         expect(artifact).toContain("Observed dispatch: actual/dispatch");
-        expect(artifact).toContain("Provider-reported response model: version");
+        expect(artifact).toContain("Provider response model ID: version");
         expect(item.termination.kind).toBe(reason === "timeout" ? "watchdog" : "abort");
       } finally {
         if (timer) clearTimeout(timer);
@@ -983,7 +986,7 @@ describe("subagent output limits", () => {
     },
   );
 
-  it("reports unknown dispatch when a child fails before emitting model events", async () => {
+  it("labels absent model evidence when a child fails before emitting model events", async () => {
     const project = createPersistenceTestProject(
       "provenance-startup-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -1023,8 +1026,8 @@ describe("subagent output limits", () => {
         response: [],
       });
       const artifact = fs.readFileSync(item.outputPath, "utf8");
-      expect(artifact).toContain("Observed dispatch: unknown");
-      expect(artifact).toContain("Provider-reported response model: unknown");
+      expect(artifact).toContain("Observed dispatch: not observed");
+      expect(artifact).toContain("Provider response model ID: not supplied by Pi");
     } finally {
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
@@ -1090,7 +1093,7 @@ describe("subagent output limits", () => {
       });
       const artifact = fs.readFileSync(item.outputPath, "utf8");
       expect(artifact).toContain("Observed dispatch: actual/dispatch");
-      expect(artifact).toContain("Provider-reported response model: provider-version");
+      expect(artifact).toContain("Provider response model ID: provider-version");
     } finally {
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
@@ -3501,7 +3504,7 @@ describe("subagent execution options", () => {
     expect(result.details?.results[0].stderr).toContain("thinking must be one of");
     const artifact = getResultOutput(result.details.results[0]);
     expect(artifact).toContain("- Thinking: not run");
-    expect(artifact).not.toContain("- Thinking: Pi default");
+    expect(artifact).not.toContain("- Thinking: child default (no explicit level passed)");
     fs.rmSync(project, { recursive: true, force: true });
     vi.mocked(spawn).mockReset();
   });

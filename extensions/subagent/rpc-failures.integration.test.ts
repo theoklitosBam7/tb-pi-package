@@ -72,10 +72,7 @@ async function completedSnapshot(
   await expect(
     Promise.race([
       (async () => {
-        while (
-          !snapshot ||
-          ["queued", "starting", "running", "stopping"].includes(snapshot.state.kind)
-        ) {
+        while (!snapshot || ["queued", "running", "stopping"].includes(snapshot.state.kind)) {
           snapshot = await manager.getRun({ ...owner, runId });
           await new Promise<void>((resolve) => setImmediate(resolve));
         }
