@@ -27,7 +27,7 @@ import {
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { createInspectionPublisher } from "./inspection-publisher.js";
+import { createInspectionPublisher } from "./inspection/inspection-publisher.js";
 import { Type } from "typebox";
 import {
   addUsageTotals,
@@ -45,7 +45,7 @@ import {
   type SubagentThinkingLevel,
   discoverAgents,
   formatAgentList,
-} from "./agents.js";
+} from "./agents/agents.js";
 import {
   AgentInspectorComponent,
   AgentInspectorStore,
@@ -53,14 +53,14 @@ import {
   getInspectorCleanup,
   getInspectorMessageText,
   getInspectorText,
-} from "./inspector.js";
+} from "./inspection/inspector.js";
 import {
   type AgentOverridesSnapshot,
   getAgentConfigurationError,
   getAgentOverride,
   loadAgentOverrides,
   resolveAgentOptions,
-} from "./overrides.js";
+} from "./agents/overrides.js";
 import {
   buildArtifactPath,
   formatChainSummary,
@@ -76,7 +76,7 @@ import {
   type WatchdogTermination,
   writeResultArtifact,
 } from "./result.js";
-import { createRpcPeer, type RpcPeer } from "./rpc-peer.js";
+import { createRpcPeer, type RpcPeer } from "./rpc/rpc-peer.js";
 import { createReportServer, getReportExtensionPath, type ReportServer } from "./report.js";
 import {
   createRunManager,

@@ -6,8 +6,8 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "./agents.js";
-import { formatModelProvenance, type ModelProvenance } from "./result.js";
+import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "../agents/agents.js";
+import { formatModelProvenance, type ModelProvenance } from "../result.js";
 
 const MAX_COMPLETED_RUNS = 50;
 const MAX_RUN_CHARS = 64_000;

@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import type { createAgentSession as CreateAgentSession } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
-import { isJsonRecord, waitForCondition } from "./test-support/pi-rpc-process.js";
+import { isJsonRecord, waitForCondition } from "../test-support/pi-rpc-process.js";
 
 const generation = "fedcba9876543210fedcba9876543210";
 const sdkPath = process.env.INSPECTION_SDK_PATH;

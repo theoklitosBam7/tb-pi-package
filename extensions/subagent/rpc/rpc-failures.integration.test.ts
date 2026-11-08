@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRpcPeer } from "./rpc-peer.js";
-import { createRunManager, type RunOwner, type RunSnapshot } from "./run-manager.js";
+import { createRunManager, type RunOwner, type RunSnapshot } from "../run-manager.js";
 
 const owner: RunOwner = { sessionId: "rpc-failure-session", generation: 1 };
 const children: ChildProcess[] = [];

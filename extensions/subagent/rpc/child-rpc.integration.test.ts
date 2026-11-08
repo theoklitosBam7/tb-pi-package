@@ -6,7 +6,7 @@ import {
   repositoryRoot,
   startPiRpc,
   waitForFile,
-} from "./test-support/pi-rpc-process.js";
+} from "../test-support/pi-rpc-process.js";
 
 const providerFixturePath = path.join(
   repositoryRoot,

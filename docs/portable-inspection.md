@@ -4,7 +4,7 @@ This guide specifies the read-only producer contract for compatible hosts that s
 
 The package develops against Pi 1.5.0. The deterministic publication fixture passes with Pi 1.5.0 and 1.4.0, using each selected SDK's directly used Pi dependencies and TypeBox. This checks the fixture scenario, not every SDK API or Workbench host acceptance.
 
-The package publishes as `org.tb-pi-package.subagent`. Repository-owned [conformance examples](../extensions/subagent/inspection-conformance-fixtures.json) define valid and invalid messages. The corpus has `version: 1` and a `cases` array. Each case has a unique `name`, a `target` of `request` or `publication`, an `expectedValid` boolean, and the literal `message`. The expected result covers stateless message validation, not revision ordering or attachment history. Compatible hosts must validate the same cases independently, without importing this extension's runtime code.
+The package publishes as `org.tb-pi-package.subagent`. Repository-owned [conformance examples](../extensions/subagent/inspection/inspection-conformance-fixtures.json) define valid and invalid messages. The corpus has `version: 1` and a `cases` array. Each case has a unique `name`, a `target` of `request` or `publication`, an `expectedValid` boolean, and the literal `message`. The expected result covers stateless message validation, not revision ordering or attachment history. Compatible hosts must validate the same cases independently, without importing this extension's runtime code.
 
 ## Terms and scope
 

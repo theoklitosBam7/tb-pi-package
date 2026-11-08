@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import subagentExtension from "./index.js";
+import subagentExtension from "../index.js";
 
 function setup() {
   const handlers = new Map<string, Set<(value: unknown) => void>>();

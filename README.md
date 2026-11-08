@@ -74,9 +74,14 @@ tb-pi-package/
 │   │   └── index.ts     # Recap lifecycle, /summary command, and renderer
 │   ├── voice-dictation/ # /dictate Foundry Local microphone command
 │   ├── subagent/        # Agent tool (single/parallel/chain modes)
-│   │   ├── agents.ts    # Agent discovery & parsing
+│   │   ├── agents/      # Agent discovery and override loading
+│   │   ├── inspection/  # Subagent inspector and inspection publishing
+│   │   ├── rpc/         # Child process RPC peer
 │   │   ├── index.ts     # Subagent tool + TUI rendering
-│   │   └── overrides.ts # Global per-agent override loading and validation
+│   │   ├── report.ts    # Child-to-parent reports
+│   │   ├── result.ts    # Result formatting and artifacts
+│   │   ├── run-manager.ts # Async run state and ownership
+│   │   └── test-support/ # Shared process helpers and fixtures
 │   └── web-search/      # web_search & web_fetch tools
 │       └── index.ts
 ├── prompts/             # Workflow prompt templates

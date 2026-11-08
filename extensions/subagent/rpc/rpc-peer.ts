@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Writable } from "node:stream";
-import { isRecord } from "./is-record.js";
+import { isRecord } from "../is-record.js";
 
 export type RpcCommand =
   | { type: "prompt"; message: string; streamingBehavior?: "steer" | "followUp" }

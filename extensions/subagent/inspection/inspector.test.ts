@@ -16,7 +16,7 @@ import {
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 import { spawn } from "node:child_process";
-import subagentExtension from "./index.js";
+import subagentExtension from "../index.js";
 import { AgentInspectorComponent, AgentInspectorStore, getInspectorCleanup } from "./inspector.js";
 
 const cleanup: Array<() => void> = [];

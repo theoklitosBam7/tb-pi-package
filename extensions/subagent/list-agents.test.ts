@@ -7,8 +7,8 @@ import listAgentsExtension, {
   buildAgentListResponse,
   createAgentDefinition,
 } from "../list-agents.js";
-import type { AgentConfig } from "./agents.js";
-import type { AgentOverrideEntry } from "./overrides.js";
+import type { AgentConfig } from "./agents/agents.js";
+import type { AgentOverrideEntry } from "./agents/overrides.js";
 
 const temporaryDirectories: string[] = [];
 
