@@ -1,12 +1,56 @@
-# Context
+# Agent delegation
 
-## Glossary
+This context describes how the package defines agents, assigns them work, and observes their execution.
 
-| Term            | Definition                                                                                                                                                                                                     |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`         | A named, specialized AI worker defined in a Markdown file with frontmatter (name, description, tools, model, subagent_type). Agents have isolated context windows and are invoked by name or by subagent_type. |
-| `subagent_type` | A categorical label in agent frontmatter that enables type-based agent resolution as an alternative to name-based resolution (e.g., `exploration`, `research`, `review`, `implementation`).                    |
-| `chain`         | Sequential execution mode for the `agent` tool where each agent's output is passed to the next via the `{previous}` placeholder.                                                                               |
-| `agent scope`   | Controls which directories are searched for agent definitions: `"user"` (~/.pi/agent/agents/), `"project"` (.pi/agents/), or `"both"`.                                                                         |
-| `extension`     | A TypeScript module that registers custom tools, slash commands, or other capabilities into pi via the ExtensionAPI.                                                                                           |
-| `prompt`        | A Markdown file defining a reusable agent workflow pattern (e.g., `scout`, `implement`).                                                                                                                       |
+## Agent definitions
+
+**Agent**:
+A named specialist with instructions and optional settings. An agent can be selected to perform a task; it is not an execution.
+_Avoid_: Worker
+
+**Agent type**:
+A category that identifies an agent's role and allows selection by role instead of by name.
+
+**Agent scope**:
+The set of agent definitions considered for a request, based on user and project sources.
+
+**Subagent**:
+An agent invoked by another agent to perform delegated work.
+_Avoid_: Child agent
+
+## Work and execution
+
+**Task**:
+A unit of work assigned to an agent. Each run handles one task.
+_Avoid_: Job
+
+**Run**:
+One execution of an agent for a task. Separate executions are separate runs, even when they use the same agent and task.
+_Avoid_: Invocation
+
+**Single mode**:
+A delegation mode that runs one task with one agent.
+
+**Parallel mode**:
+A delegation mode that runs multiple tasks at the same time. Each task has its own run.
+
+**Chain**:
+An ordered sequence of agent tasks. Each task can use the previous task's result as context.
+_Avoid_: Pipeline
+
+## Reports and outcomes
+
+**Progress report**:
+An update that a subagent sends to the calling agent while its run is active. A report does not request a reply and is separate from the run's final result.
+_Avoid_: Result
+
+**Run result**:
+The final outcome of a run, including its execution status and output. A completed status means the execution ended; it does not establish the quality of the work.
+_Avoid_: Report
+
+**Result artifact**:
+A saved record of a run's final output and execution details. It supports later review but does not prove that the work is correct.
+
+**Run inspection**:
+A read-only view of a run's status and visible activity. Inspection does not control the run or establish the quality of its work.
+_Avoid_: Run control

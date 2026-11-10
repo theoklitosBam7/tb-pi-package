@@ -13,7 +13,11 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { discoverAgents, type AgentConfig, type SubagentThinkingLevel } from "./subagent/agents.js";
+import {
+  discoverAgents,
+  type AgentConfig,
+  type SubagentThinkingLevel,
+} from "./subagent/agents/agents.js";
 import {
   type AgentOverrideEntry,
   type EffectiveModelSource,
@@ -21,7 +25,7 @@ import {
   getAgentOverride,
   loadAgentOverrides,
   resolveAgentOptions,
-} from "./subagent/overrides.js";
+} from "./subagent/agents/overrides.js";
 
 /**
  * Agent definition for display

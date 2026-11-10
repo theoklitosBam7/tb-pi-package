@@ -1,3 +1,4 @@
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -180,6 +181,7 @@ describe("panel image layout", () => {
     let command: Command | undefined;
     Reflect.apply(subagent, undefined, [
       {
+        events: createEventBus(),
         on() {},
         registerTool() {},
         registerShortcut() {},

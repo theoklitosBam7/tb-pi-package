@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { UsageTotals, UsageTotalsWithTurns } from "../lib/usage.js";
-import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "./agents.js";
+import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "./agents/agents.js";
 
 interface AbortableProcess {
   kill(signal: NodeJS.Signals): boolean;
@@ -65,6 +65,16 @@ export interface ModelProvenance {
   attempted: Array<string | null>;
   dispatch: string[];
   response: string[];
+}
+
+export function formatModelProvenance(provenance: ModelProvenance): string[] {
+  return [
+    `Requested selection: ${provenance.requested ?? "not specified"}`,
+    `Resolved selections: ${provenance.resolved.map((model) => model ?? "child default").join(", ") || "none"}`,
+    `Attempted selections: ${provenance.attempted.map((model) => model ?? "child default").join(", ") || "none"}`,
+    `Observed dispatch: ${provenance.dispatch.join(", ") || "not observed"}`,
+    `Provider response model ID: ${provenance.response.join(", ") || "not supplied by Pi"}`,
+  ];
 }
 
 interface SingleResultData {
@@ -159,13 +169,7 @@ function formatArtifactMarkdown(options: {
     `- Status: ${options.status}`,
     `- Model: ${options.model ?? "unknown"}`,
     ...(options.modelProvenance
-      ? [
-          `- Requested selection: ${options.modelProvenance.requested ?? "not specified"}`,
-          `- Resolved selections: ${options.modelProvenance.resolved.map((model) => model ?? "child default").join(", ") || "none"}`,
-          `- Attempted selections: ${options.modelProvenance.attempted.map((model) => model ?? "child default").join(", ") || "none"}`,
-          `- Observed dispatch: ${options.modelProvenance.dispatch.join(", ") || "unknown"}`,
-          `- Provider-reported response model: ${options.modelProvenance.response.join(", ") || "unknown"}`,
-        ]
+      ? formatModelProvenance(options.modelProvenance).map((line) => `- ${line}`)
       : []),
     `- Thinking: ${options.thinkingLabel}`,
     `- Exit code: ${options.exitCode}`,

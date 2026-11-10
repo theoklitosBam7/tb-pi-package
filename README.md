@@ -10,7 +10,7 @@ This package extends pi with custom tools, slash commands, specialized subagents
 
 ## Features
 
-- **Subagent tool** — Delegate tasks to specialized agents with isolated context windows. Supports single, parallel, and chained (sequential) execution modes.
+- **Subagent tool** — Delegate tasks to specialized agents with isolated context windows. Supports synchronous single, parallel, and chained (sequential) execution, plus asynchronous single and parallel runs that the parent can message and monitor.
 - **Ask user tool** — Ask one or more structured questions and collect answers in TUI or RPC mode.
 - **Web search & fetch** — Search DuckDuckGo and fetch page content directly from pi.
 - **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
@@ -40,18 +40,19 @@ Once installed, the package's extensions, agents, prompts, and web-search skill 
 
 Detailed guides live in [`docs/`](docs/):
 
-| Document                                         | Covers                                             |
-| ------------------------------------------------ | -------------------------------------------------- |
-| [Extensions](docs/extensions.md)                 | Tools and slash commands each extension adds       |
-| [Automatic recaps](docs/automatic-recaps.md)     | Global `/summary` settings, task scope, and limits |
-| [Web search and fetch](docs/web-search.md)       | Search, fetch, pagination, and safety limits       |
-| [Subagent tool](docs/subagent-tool.md)           | Single, parallel, and chained task examples        |
-| [Agent inspector](docs/agent-inspector.md)       | Inspect running and completed agent runs           |
-| [Agent definitions](docs/agent-definitions.md)   | Agent files, built-in agents, AGENTS example       |
-| [Prompts](docs/prompts.md)                       | Workflow prompt templates                          |
-| [Voice dictation](docs/voice-dictation.md)       | Foundry Local setup and `/dictate` usage           |
-| [Session costs](docs/session-costs.md)           | `/session-costs` report and token accounting       |
-| [Subagent overrides](docs/subagent-overrides.md) | Per-agent `settings.json` overrides                |
+| Document                                           | Covers                                                            |
+| -------------------------------------------------- | ----------------------------------------------------------------- |
+| [Extensions](docs/extensions.md)                   | Tools and slash commands each extension adds                      |
+| [Automatic recaps](docs/automatic-recaps.md)       | Global `/summary` settings, task scope, and limits                |
+| [Web search and fetch](docs/web-search.md)         | Search, fetch, pagination, and safety limits                      |
+| [Subagent tool](docs/subagent-tool.md)             | Synchronous and asynchronous tasks, messages, reports, and limits |
+| [Agent inspector](docs/agent-inspector.md)         | Inspect synchronous and asynchronous agent runs                   |
+| [Portable inspection](docs/portable-inspection.md) | Read-only event bus contract for compatible hosts                 |
+| [Agent definitions](docs/agent-definitions.md)     | Agent files, built-in agents, AGENTS example                      |
+| [Prompts](docs/prompts.md)                         | Workflow prompt templates                                         |
+| [Voice dictation](docs/voice-dictation.md)         | Foundry Local setup and `/dictate` usage                          |
+| [Session costs](docs/session-costs.md)             | `/session-costs` report and token accounting                      |
+| [Subagent overrides](docs/subagent-overrides.md)   | Per-agent `settings.json` overrides                               |
 
 ## Project Structure
 
@@ -73,9 +74,14 @@ tb-pi-package/
 │   │   └── index.ts     # Recap lifecycle, /summary command, and renderer
 │   ├── voice-dictation/ # /dictate Foundry Local microphone command
 │   ├── subagent/        # Agent tool (single/parallel/chain modes)
-│   │   ├── agents.ts    # Agent discovery & parsing
+│   │   ├── agents/      # Agent discovery and override loading
+│   │   ├── inspection/  # Subagent inspector and inspection publishing
+│   │   ├── rpc/         # Child process RPC peer
 │   │   ├── index.ts     # Subagent tool + TUI rendering
-│   │   └── overrides.ts # Global per-agent override loading and validation
+│   │   ├── report.ts    # Child-to-parent reports
+│   │   ├── result.ts    # Result formatting and artifacts
+│   │   ├── run-manager.ts # Async run state and ownership
+│   │   └── test-support/ # Shared process helpers and fixtures
 │   └── web-search/      # web_search & web_fetch tools
 │       └── index.ts
 ├── prompts/             # Workflow prompt templates

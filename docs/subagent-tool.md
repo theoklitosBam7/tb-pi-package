@@ -1,6 +1,6 @@
 # Subagent tool
 
-The `agent` tool runs tasks in one of three modes: single, parallel, or chained. Each task runs in a child agent process with its own context window and returns a Markdown artifact path. Read that file before you continue work that depends on the result.
+By default, the `agent` tool runs tasks synchronously in single, parallel, or chained mode. It waits for the requested work to finish and returns a Markdown artifact path for each task. Set `async: true` for a single or parallel run to return run IDs promptly and manage the work while it continues.
 
 | Mode     | Input            | Behavior                                        |
 | -------- | ---------------- | ----------------------------------------------- |
@@ -12,6 +12,7 @@ The `agent` tool runs tasks in one of three modes: single, parallel, or chained.
 
 | Parameter              | Type    | Behavior                                                                                                                                                                                      |
 | ---------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `async`                | boolean | Start single or parallel tasks asynchronously. Async chains are not supported.                                                                                                                |
 | `agent`                | string  | Name of the agent to invoke. Mutually exclusive with `subagent_type`.                                                                                                                         |
 | `subagent_type`        | string  | Select an agent by type, for example `planning` or `review`.                                                                                                                                  |
 | `task`                 | string  | Task text for single mode.                                                                                                                                                                    |
@@ -27,6 +28,36 @@ The `agent` tool runs tasks in one of three modes: single, parallel, or chained.
 
 In a chain, step N+1 receives step N's report wherever its task contains `{previous}`.
 
+The [terminal inspector](agent-inspector.md) is available only in interactive TUI mode. Compatible hosts can subscribe to [portable inspection](portable-inspection.md) for read-only activity without child controls or artifact access. This does not change tool arguments or results.
+
+## Asynchronous runs
+
+Set `async: true` for a single task or a `tasks` array to start asynchronous runs. The tool validates the full request, schedules the runs, and returns run IDs and initial status snapshots. It does not wait for the children to finish. Async chains are not supported. Managed children also cannot launch asynchronous subagents; they can still use the synchronous modes.
+
+The asynchronous session manager runs up to four children at once and queues up to 32 more. These limits apply to asynchronous runs; synchronous calls keep their existing limits. The manager rejects a batch that exceeds the queue limit before starting any task in that batch. A queued task's watchdog starts when the task starts.
+
+For example, start a run, check its state, and send it a follow-up message:
+
+```js
+agent({ async: true, agent: "scout", task: "Map the authentication flow" });
+agent_status({ runId: "<run ID from the first result>" });
+agent_send({
+  runId: "<run ID from the first result>",
+  message: "Include the token refresh path",
+  mode: "follow_up",
+});
+```
+
+Use `agent_status` with no arguments to list this session's asynchronous runs, or pass `runId` to inspect one run. A snapshot includes its ID, agent, task, state, reports, and message delivery outcomes. States are `queued`, `running`, `stopping`, `completed`, `failed`, `aborted`, and `timed-out`. The `completed` state reports child execution. Review the artifact against the task to assess the work. A terminal result includes its artifact path when one exists. The manager retains up to 50 terminal runs in memory.
+
+Use `agent_send` with `runId`, `message`, and `mode: "steer"` or `mode: "follow_up"` to send a message to a queued or active run. The tool returns an accepted message ID, or a rejection reason. Acceptance means the manager queued the message. Check `agent_status` for its delivery outcome. `accepted-by-child` confirms transport acceptance only. It does not prove that the child model read or followed the message. A message accepted before the child exits may become `undelivered`. Each run accepts at most 32 messages, each up to 8,000 UTF-16 code units.
+
+The child can call `report_to_parent` with a `message` field to send an explicit progress report. The call returns when the parent manager accepts or rejects the report. It does not wait for a reply. The parent receives report notifications while the child runs. While the parent run is active, Pi makes each report and terminal notification available at a safe agent-loop boundary. This does not interrupt an active model request or tool call. An event can start a turn when the parent is idle. Terminal notifications include run details and the artifact path when the artifact was written first. A run can send at most 32 reports, each up to 8,000 UTF-16 code units and 8 KiB of UTF-8 data. `agent_status` retains accepted reports within the manager's retention limits. It confirms stored state, not that the parent model read or acted on a report. Ordinary child output remains available in the inspector.
+
+Use `agent_cancel` with a `runId` to stop an asynchronous run. Queued tasks are cancelled before they start. Active tasks use the same bounded process cleanup as an inspector stop. Parent abort after the asynchronous launch returns does not cancel the run. Pi shuts down the current session before a session change or reload; the extension then cancels queued and active runs and clears their in-memory state. A parent crash does not restore process or message state. Final artifacts remain on disk, but the manager does not reattach to child processes.
+
+When an artifact is available, the run writes it before sending its terminal notification. A queued cancellation or finalization failure may have no artifact. Terminal states do not restart. To continue work after completion, start a new run. The extension sends asynchronous reports and results as custom messages for session history. Notifications are best-effort; use `agent_status` to check a run if a notification does not arrive.
+
 ## Child output limits
 
 The runner discards a stdout JSONL line longer than 1,048,576 UTF-16 code units, then resumes at the next line. It retains at most 65,536 UTF-16 code units of stderr. The result's stderr includes `[stdout line truncated]` or `[stderr truncated]` when either limit is exceeded. Watchdog timeout results omit stderr, including these markers, to avoid exposing child diagnostics.
@@ -41,15 +72,17 @@ In parallel mode, only the timed-out child is stopped. The synchronous call stil
 
 ## Model priority
 
-The tool resolves each agent's model in this order: the tool input `model`, the settings override, the agent frontmatter, then the parent agent's model. For thinking, the order is tool input, settings override, frontmatter, then the parent level. Set both `model` and `thinking` to `inherit` to use the parent's current values even when settings or frontmatter specify different values. Settings overrides are described in [Subagent overrides](subagent-overrides.md).
+Omit `model` to use the configured selection order. Empty or whitespace-only model overrides are invalid, including overrides on parallel tasks and chain steps. The tool rejects the whole request before starting any child if any model override is blank. Use `model: "inherit"` to select the parent model explicitly.
+
+The tool resolves each agent's model in this order: the tool input `model`, the settings override, the agent frontmatter, then the parent agent's model. For thinking, the order is tool input, settings override, frontmatter, then the parent level. Set both `model` and `thinking` to `inherit` to use the parent's current values even when settings or frontmatter specify different values. The inspector and artifact show the resolved thinking launch setting. `Thinking: child default (no explicit level passed)` means the runner passed no `--thinking` value. It describes the launch setting, not a measured runtime reasoning budget. A queued run can show the resolved launch setting before execution starts. Settings overrides are described in [Subagent overrides](subagent-overrides.md).
 
 For parallel and chain calls, `modelFallback: "none"` requires a concrete model selection. The runner checks every strict item before it starts any child. A top-level policy applies to each item unless the item specifies its own policy. An explicit strict `model: "inherit"` requires the parent model to be available.
 
 ## Model provenance
 
-Result artifacts and the inspector separate the requested selection, resolved candidates, attempted launch selections, observed Pi dispatch identities, and provider-reported response model IDs. `child default` means the runner passed no model argument. An empty observation is `unknown`. Multiple identities are listed separately. A dispatch identity can come from an error event and does not prove that a model generated a response. Provider response IDs appear only when Pi supplies them. A response ID on an error does not prove that a model generated output.
+Result artifacts and the inspector separate the requested selection, resolved candidates, attempted launch selections, observed Pi dispatch identities, and provider response model IDs. `child default` means the runner passed no model argument. An empty dispatch observation appears as `Observed dispatch: not observed`. An empty response ID appears as `Provider response model ID: not supplied by Pi`. Multiple identities remain listed separately. A dispatch identity can come from an error event and does not prove that a model generated a response. Pi supplies response model IDs when it has them. A response ID on an error does not prove that a model generated output.
 
-The legacy `Model` field records the last launch selection when one was supplied. Older results may have only that field. A selection is not proof of dispatch: Pi can resolve model names or providers differently, and provider routing or virtual models can hide the physical model. These records do not enforce or prove an exact physical model.
+The legacy `Model` field records the last launch selection when one was supplied. Older results may have only that field. Pi can resolve model names or providers differently. Provider routing or virtual models can hide the physical model, so these records do not prove an exact physical model.
 
 ## Agent scope
 

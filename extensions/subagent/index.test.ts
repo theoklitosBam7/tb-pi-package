@@ -1,3 +1,4 @@
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { EventEmitter } from "node:events";
 import { createServer } from "node:net";
 import { PassThrough } from "node:stream";
@@ -7,6 +8,7 @@ import * as path from "node:path";
 import { getPackageDir, initTheme } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -292,7 +294,7 @@ describe("writeResultArtifact", () => {
       expect(artifact).toContain("- Status: completed");
       expect(artifact).toContain("- Model: anthropic/claude-sonnet-4-5");
       expect(artifact).not.toContain("Observed dispatch:");
-      expect(artifact).not.toContain("Provider-reported response model:");
+      expect(artifact).not.toContain("Provider response model ID:");
       expect(artifact).toContain("- Thinking: medium");
       expect(artifact).toContain("- Task: parallel item 2");
       expect(artifact).toContain("## Result\n\n# Finding\n\nComplete output.");
@@ -338,7 +340,7 @@ describe("writeResultArtifact", () => {
 
       const artifact = fs.readFileSync(outputPath, "utf8");
       expect(artifact).toContain("- Status: aborted");
-      expect(artifact).toContain("- Thinking: Pi default");
+      expect(artifact).toContain("- Thinking: child default (no explicit level passed)");
       expect(artifact).toContain("- Stop reason: aborted");
       expect(artifact).toContain("## Result\n\npartial response");
       expect(artifact).toContain(
@@ -476,6 +478,7 @@ describe("artifact-backed rendering", () => {
 
       const tools: Record<string, any> = {};
       subagentExtension({
+        events: createEventBus(),
         on() {},
         registerTool(tool: any) {
           tools[tool.name] = tool;
@@ -540,6 +543,7 @@ describe("subagent rendering", () => {
   it("includes descendant usage once in aggregate rendering", () => {
     const tools: Record<string, any> = {};
     subagentExtension({
+      events: createEventBus(),
       on() {},
       registerTool(tool: any) {
         tools[tool.name] = tool;
@@ -601,6 +605,7 @@ describe("subagent rendering", () => {
   it("uses status classification for concurrent results and keeps partial renders status-only", () => {
     const tools: Record<string, any> = {};
     subagentExtension({
+      events: createEventBus(),
       on() {},
       registerTool(tool: any) {
         tools[tool.name] = tool;
@@ -707,9 +712,11 @@ function emitPersistenceTestMessage(
 function registerPersistenceTestTools(
   thinkingLevel?: "off" | "xhigh",
   events: Record<string, () => void> = {},
+  eventBus = createEventBus(),
 ): Record<string, any> {
   const tools: Record<string, any> = {};
   subagentExtension({
+    events: eventBus,
     getThinkingLevel: () => thinkingLevel,
     on(event: string, handler: () => void) {
       events[event] = handler;
@@ -900,6 +907,9 @@ describe("subagent output limits", () => {
         dispatch: ["provider/first", "provider/second"],
         response: [],
       });
+      const artifact = fs.readFileSync(result.details.results[0].outputPath, "utf8");
+      expect(artifact).toContain("Observed dispatch: provider/first, provider/second");
+      expect(artifact).toContain("Provider response model ID: not supplied by Pi");
     } finally {
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
@@ -972,7 +982,7 @@ describe("subagent output limits", () => {
         });
         const artifact = fs.readFileSync(item.outputPath, "utf8");
         expect(artifact).toContain("Observed dispatch: actual/dispatch");
-        expect(artifact).toContain("Provider-reported response model: version");
+        expect(artifact).toContain("Provider response model ID: version");
         expect(item.termination.kind).toBe(reason === "timeout" ? "watchdog" : "abort");
       } finally {
         if (timer) clearTimeout(timer);
@@ -983,7 +993,7 @@ describe("subagent output limits", () => {
     },
   );
 
-  it("reports unknown dispatch when a child fails before emitting model events", async () => {
+  it("labels absent model evidence when a child fails before emitting model events", async () => {
     const project = createPersistenceTestProject(
       "provenance-startup-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -1023,8 +1033,8 @@ describe("subagent output limits", () => {
         response: [],
       });
       const artifact = fs.readFileSync(item.outputPath, "utf8");
-      expect(artifact).toContain("Observed dispatch: unknown");
-      expect(artifact).toContain("Provider-reported response model: unknown");
+      expect(artifact).toContain("Observed dispatch: not observed");
+      expect(artifact).toContain("Provider response model ID: not supplied by Pi");
     } finally {
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
@@ -1090,7 +1100,7 @@ describe("subagent output limits", () => {
       });
       const artifact = fs.readFileSync(item.outputPath, "utf8");
       expect(artifact).toContain("Observed dispatch: actual/dispatch");
-      expect(artifact).toContain("Provider-reported response model: provider-version");
+      expect(artifact).toContain("Provider response model ID: provider-version");
     } finally {
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
@@ -1898,6 +1908,72 @@ setTimeout(() => process.exit(0), 12000);`,
       fs.rmSync(project, { recursive: true, force: true });
     }
   }, 8_000);
+
+  it.each(["", " \t\n"])("rejects blank models in the public parameter schema: %j", (model) => {
+    const parameters = registerPersistenceTestTools().agent.parameters;
+    expect(Value.Check(parameters, { agent: "worker", task: "test", model })).toBe(false);
+    expect(Value.Check(parameters, { tasks: [{ agent: "worker", task: "test", model }] })).toBe(
+      false,
+    );
+    expect(Value.Check(parameters, { chain: [{ agent: "worker", task: "test", model }] })).toBe(
+      false,
+    );
+    for (const valid of [undefined, "inherit", "configured/model"]) {
+      const input = {
+        agent: "worker",
+        task: "test",
+        ...(valid !== undefined ? { model: valid } : {}),
+      };
+      expect(Value.Check(parameters, input)).toBe(true);
+      expect(Value.Check(parameters, { tasks: [input] })).toBe(true);
+      expect(Value.Check(parameters, { chain: [input] })).toBe(true);
+    }
+  });
+
+  it.each([
+    { agent: "worker", task: "test", model: "" },
+    { agent: "worker", task: "test", model: " \t\n" },
+    { async: true, agent: "worker", task: "test", model: "" },
+    { model: "", tasks: [{ agent: "worker", task: "test" }] },
+    {
+      tasks: [
+        { agent: "worker", task: "first" },
+        { agent: "worker", task: "test", model: "" },
+      ],
+    },
+    { async: true, tasks: [{ agent: "worker", task: "test", model: " " }] },
+    { model: "", chain: [{ agent: "worker", task: "test" }] },
+    {
+      chain: [
+        { agent: "worker", task: "first" },
+        { agent: "worker", task: "test", model: " " },
+      ],
+    },
+  ])("rejects blank model overrides before starting any child: %j", async (input) => {
+    const project = createPersistenceTestProject(
+      "blank-model-",
+      "---\nname: worker\ndescription: Test worker\nmodel: configured/model\n---\n",
+    );
+    try {
+      const result = await registerPersistenceTestTools().agent.execute(
+        "blank-model",
+        { ...input, agentScope: "project", confirmProjectAgents: false },
+        undefined,
+        undefined,
+        {
+          cwd: project,
+          hasUI: false,
+          sessionManager: { getSessionFile: () => path.join(project, "session.jsonl") },
+        },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Model must be a non-blank string");
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(spawn).mockReset();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
 
   it.each([
     { modelFallback: "invalid", tasks: [{ agent: "worker", task: "test" }] },
@@ -3089,7 +3165,7 @@ setTimeout(() => process.exit(0), 12000);`,
     }
   }, 5_000);
 
-  it("returns a timeout artifact when a child makes no progress", async () => {
+  it("returns a timeout artifact and publishes cleanup uncertainty when a child makes no progress", async () => {
     const project = createPersistenceTestProject(
       "watchdog-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -3100,7 +3176,11 @@ setTimeout(() => process.exit(0), 12000);`,
       return true;
     });
     vi.mocked(spawn).mockReturnValue(child as never);
-    const tools = registerPersistenceTestTools();
+    const events: Record<string, () => void> = {};
+    const eventBus = createEventBus();
+    const publications: unknown[] = [];
+    eventBus.on("workbench.inspection.v1.publish", (value) => publications.push(value));
+    const tools = registerPersistenceTestTools(undefined, events, eventBus);
     const fallback = setTimeout(() => child.emit("close", 0, null), 2000);
 
     try {
@@ -3131,7 +3211,26 @@ setTimeout(() => process.exit(0), 12000);`,
       const artifact = fs.readFileSync(result.details.results[0].outputPath, "utf8");
       expect(artifact).toContain("idle");
       expect(artifact).not.toContain("Status: completed");
+      eventBus.emit("workbench.inspection.v1.request", {
+        version: 1,
+        kind: "attach",
+        requestId: "sync-timeout-snapshot",
+        generation: "sync-timeout-generation",
+      });
+      expect(publications).toEqual([
+        expect.objectContaining({
+          kind: "snapshot",
+          activities: [
+            expect.objectContaining({
+              toolCallId: "call-watchdog",
+              state: "timed-out",
+              cleanup: "unknown",
+            }),
+          ],
+        }),
+      ]);
     } finally {
+      events.session_shutdown();
       clearTimeout(fallback);
       vi.mocked(spawn).mockReset();
       vi.unstubAllEnvs();
@@ -3501,7 +3600,7 @@ describe("subagent execution options", () => {
     expect(result.details?.results[0].stderr).toContain("thinking must be one of");
     const artifact = getResultOutput(result.details.results[0]);
     expect(artifact).toContain("- Thinking: not run");
-    expect(artifact).not.toContain("- Thinking: Pi default");
+    expect(artifact).not.toContain("- Thinking: child default (no explicit level passed)");
     fs.rmSync(project, { recursive: true, force: true });
     vi.mocked(spawn).mockReset();
   });

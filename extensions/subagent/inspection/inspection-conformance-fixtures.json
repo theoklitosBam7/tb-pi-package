@@ -1,0 +1,455 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "attach",
+      "target": "request",
+      "expectedValid": true,
+      "message": {
+        "version": 1,
+        "kind": "attach",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef"
+      }
+    },
+    {
+      "name": "detach",
+      "target": "request",
+      "expectedValid": true,
+      "message": {
+        "version": 1,
+        "kind": "detach",
+        "requestId": "req-fedcba9876543210fedcba9876543210",
+        "generation": "gen-0123456789abcdef0123456789abcdef"
+      }
+    },
+    {
+      "name": "snapshot",
+      "target": "publication",
+      "expectedValid": true,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "batch",
+      "target": "publication",
+      "expectedValid": true,
+      "message": {
+        "version": 1,
+        "kind": "batch",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 1,
+        "upserts": [
+          {
+            "id": "run-1",
+            "title": "scout",
+            "task": "Inspect café",
+            "toolCallId": "call-1",
+            "state": "running",
+            "thinking": "child-default",
+            "model": {
+              "requested": "provider/model",
+              "attempted": [],
+              "truncated": false
+            },
+            "items": [
+              {
+                "kind": "response",
+                "sequence": 1,
+                "text": "Hello",
+                "truncated": false
+              },
+              {
+                "kind": "tool",
+                "sequence": 2,
+                "id": "tool-1",
+                "name": "read",
+                "state": "running",
+                "output": "",
+                "truncated": false
+              }
+            ],
+            "omittedItems": 0,
+            "truncated": false
+          }
+        ],
+        "removals": [],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "removal",
+      "target": "publication",
+      "expectedValid": true,
+      "message": {
+        "version": 1,
+        "kind": "batch",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 2,
+        "upserts": [],
+        "removals": ["run-1"],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "request-unknown-version",
+      "target": "request",
+      "expectedValid": false,
+      "message": {
+        "version": 2,
+        "kind": "attach",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef"
+      }
+    },
+    {
+      "name": "request-unknown-property",
+      "target": "request",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "detach",
+        "requestId": "req-fedcba9876543210fedcba9876543210",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "extra": true
+      }
+    },
+    {
+      "name": "request-invalid-identity",
+      "target": "request",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "attach",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "invalid generation"
+      }
+    },
+    {
+      "name": "publication-unknown-version",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 2,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "publication-negative-revision",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": -1,
+        "capabilities": ["replacement", "removal"],
+        "activities": [],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "publication-unsafe-revision",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 9007199254740992,
+        "capabilities": ["replacement", "removal"],
+        "activities": [],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "activity-title-byte-limit",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [
+          {
+            "id": "run-1",
+            "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "state": "running",
+            "items": [],
+            "omittedItems": 0,
+            "truncated": false
+          }
+        ],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "activity-null-optional-task",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [
+          {
+            "id": "run-1",
+            "title": "scout",
+            "state": "running",
+            "items": [],
+            "omittedItems": 0,
+            "truncated": false,
+            "task": null
+          }
+        ],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "activity-private-tool-arguments",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [
+          {
+            "id": "run-1",
+            "title": "scout",
+            "state": "running",
+            "items": [
+              {
+                "kind": "tool",
+                "sequence": 1,
+                "id": "tool-1",
+                "name": "read",
+                "state": "running",
+                "output": "",
+                "truncated": false,
+                "args": {
+                  "path": "private"
+                }
+              }
+            ],
+            "omittedItems": 0,
+            "truncated": false
+          }
+        ],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "activity-duplicate-identities",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [
+          {
+            "id": "run-1",
+            "title": "scout",
+            "state": "running",
+            "items": [],
+            "omittedItems": 0,
+            "truncated": false
+          },
+          {
+            "id": "run-1",
+            "title": "scout",
+            "state": "running",
+            "items": [],
+            "omittedItems": 0,
+            "truncated": false
+          }
+        ],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "batch-overlapping-upsert-and-removal",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "batch",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 2,
+        "upserts": [
+          {
+            "id": "run-1",
+            "title": "scout",
+            "state": "running",
+            "items": [],
+            "omittedItems": 0,
+            "truncated": false
+          }
+        ],
+        "removals": ["run-1"],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "activity-out-of-order-items",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [
+          {
+            "id": "run-1",
+            "title": "scout",
+            "state": "running",
+            "items": [
+              {
+                "kind": "response",
+                "sequence": 2,
+                "text": "a",
+                "truncated": false
+              },
+              {
+                "kind": "response",
+                "sequence": 1,
+                "text": "b",
+                "truncated": false
+              }
+            ],
+            "omittedItems": 0,
+            "truncated": false
+          }
+        ],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "activity-duplicate-tool-identities",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [
+          {
+            "id": "run-1",
+            "title": "scout",
+            "state": "running",
+            "items": [
+              {
+                "kind": "tool",
+                "sequence": 1,
+                "id": "tool-1",
+                "name": "read",
+                "state": "running",
+                "output": "",
+                "truncated": false
+              },
+              {
+                "kind": "tool",
+                "sequence": 2,
+                "id": "tool-1",
+                "name": "read",
+                "state": "running",
+                "output": "",
+                "truncated": false
+              }
+            ],
+            "omittedItems": 0,
+            "truncated": false
+          }
+        ],
+        "omittedActivities": 0
+      }
+    },
+    {
+      "name": "activity-unpaired-surrogate",
+      "target": "publication",
+      "expectedValid": false,
+      "message": {
+        "version": 1,
+        "kind": "snapshot",
+        "requestId": "req-0123456789abcdef0123456789abcdef",
+        "generation": "gen-0123456789abcdef0123456789abcdef",
+        "providerId": "org.example.subagent",
+        "epoch": "epoch-0123456789abcdef0123456789abcdef",
+        "revision": 0,
+        "capabilities": ["replacement", "removal"],
+        "activities": [
+          {
+            "id": "run-1",
+            "title": "\ud800",
+            "state": "running",
+            "items": [],
+            "omittedItems": 0,
+            "truncated": false
+          }
+        ],
+        "omittedActivities": 0
+      }
+    }
+  ]
+}
