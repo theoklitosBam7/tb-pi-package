@@ -11,10 +11,12 @@ function createSdkFixture({
   name = packageName,
   version = "9.9.9",
   withCli = true,
+  withEntry = true,
 }: {
   name?: string;
   version?: string;
   withCli?: boolean;
+  withEntry?: boolean;
 } = {}): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sdk-"));
   temporaryDirectories.push(root);
@@ -22,10 +24,9 @@ function createSdkFixture({
     path.join(root, "package.json"),
     JSON.stringify({ name, version, type: "module" }),
   );
-  if (withCli) {
-    fs.mkdirSync(path.join(root, "dist"));
-    fs.writeFileSync(path.join(root, "dist", "cli.js"), "// fixture\n");
-  }
+  fs.mkdirSync(path.join(root, "dist"));
+  if (withCli) fs.writeFileSync(path.join(root, "dist", "cli.js"), "// fixture\n");
+  if (withEntry) fs.writeFileSync(path.join(root, "dist", "index.js"), "export {};\n");
   return root;
 }
 
@@ -41,6 +42,7 @@ describe("piSdkOverride", () => {
       "/preferred",
     );
     expect(piSdkOverride({ INSPECTION_SDK_PATH: "/legacy" })).toBe("/legacy");
+    expect(piSdkOverride({ PI_SDK_PATH: "  ", INSPECTION_SDK_PATH: "/legacy" })).toBe("/legacy");
     expect(piSdkOverride({})).toBeUndefined();
     expect(piSdkOverride({ PI_SDK_PATH: "  " })).toBeUndefined();
   });
@@ -55,7 +57,9 @@ describe("selectPiSdk", () => {
       packageName,
     );
     expect(sdk.cliPath).toBe(path.join(sdk.root, "dist", "cli.js"));
+    expect(sdk.entryPath).toBe(path.join(sdk.root, "dist", "index.js"));
     expect(fs.existsSync(sdk.cliPath)).toBe(true);
+    expect(fs.existsSync(sdk.entryPath)).toBe(true);
     expect(typeof sdk.version).toBe("string");
     expect(sdk.require.resolve("typebox")).toContain("typebox");
   });
@@ -67,6 +71,7 @@ describe("selectPiSdk", () => {
     expect(sdk.root).toBe(fs.realpathSync(root));
     expect(sdk.version).toBe("1.2.3");
     expect(sdk.cliPath).toBe(path.join(fs.realpathSync(root), "dist", "cli.js"));
+    expect(sdk.entryPath).toBe(path.join(fs.realpathSync(root), "dist", "index.js"));
   });
 
   it("selects the SDK at INSPECTION_SDK_PATH", () => {
@@ -80,12 +85,20 @@ describe("selectPiSdk", () => {
   it("rejects a package with another name", () => {
     const root = createSdkFixture({ name: "@earendil-works/pi-ai" });
 
-    expect(() => selectPiSdk({ PI_SDK_PATH: root })).toThrow(/not a pi-coding-agent package/);
+    expect(() => selectPiSdk({ PI_SDK_PATH: root })).toThrow(
+      /not the @earendil-works\/pi-coding-agent package/,
+    );
   });
 
   it("rejects an SDK without the CLI", () => {
     const root = createSdkFixture({ withCli: false });
 
     expect(() => selectPiSdk({ PI_SDK_PATH: root })).toThrow(/has no CLI/);
+  });
+
+  it("rejects an SDK without the entry module", () => {
+    const root = createSdkFixture({ withEntry: false });
+
+    expect(() => selectPiSdk({ PI_SDK_PATH: root })).toThrow(/has no entry module/);
   });
 });

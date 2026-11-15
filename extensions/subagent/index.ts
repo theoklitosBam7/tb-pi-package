@@ -150,6 +150,8 @@ const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
 const WATCHDOG_CLEANUP_GRACE_MS = 5_000;
 const WATCHDOG_CLOSE_WAIT_MS = 1_000;
+// The run manager must outwait the runner's full stop bound plus a margin.
+const WATCHDOG_CLEANUP_TIMEOUT_MS = WATCHDOG_CLEANUP_GRACE_MS + WATCHDOG_CLOSE_WAIT_MS + 1_000;
 const MAX_WATCHDOG_SECONDS = 2_147_483;
 const DEFAULT_WATCHDOG = { idleSeconds: 300, toolSeconds: 600, taskSeconds: 1800 } as const;
 type WatchdogConfig = {
@@ -1532,7 +1534,7 @@ export default function (pi: ExtensionAPI) {
     if (!manager) {
       manager = createRunManager({
         ...owner,
-        cleanupTimeoutMs: WATCHDOG_CLEANUP_GRACE_MS + WATCHDOG_CLOSE_WAIT_MS + 1_000,
+        cleanupTimeoutMs: WATCHDOG_CLEANUP_TIMEOUT_MS,
         onNotification: (event) => {
           if (generation !== owner.generation) return;
           if (event.type === "terminal") {

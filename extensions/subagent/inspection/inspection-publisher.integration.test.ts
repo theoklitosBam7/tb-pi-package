@@ -65,7 +65,7 @@ async function runInspectionScenario({
     fs.symlinkSync(typeboxRoot, path.join(sourceRoot, "node_modules", "typebox"), "dir");
   }
   const sdkModule: typeof import("@earendil-works/pi-coding-agent") = await import(
-    pathToFileURL(path.join(selectedSdk.root, "dist", "index.js")).href
+    pathToFileURL(selectedSdk.entryPath).href
   );
   const requiredCapabilities = [
     "createAgentSession",

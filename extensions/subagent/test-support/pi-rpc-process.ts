@@ -4,13 +4,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isJsonRecord, type JsonRecord } from "./json-record.js";
 import { selectPiSdk } from "./pi-sdk.js";
 
-export type JsonRecord = Record<string, unknown>;
-
-export function isJsonRecord(value: unknown): value is JsonRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+export { isJsonRecord, type JsonRecord } from "./json-record.js";
 
 export const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

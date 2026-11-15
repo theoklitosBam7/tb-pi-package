@@ -16,7 +16,7 @@ Set `PI_SDK_PATH` to the root directory of a `@earendil-works/pi-coding-agent` p
 PI_SDK_PATH=/path/to/pi-coding-agent pnpm test:integration
 ```
 
-The test support rejects a directory that is not a Pi coding agent package or that has no `dist/cli.js`. It logs the selected version and path once.
+The test support rejects a directory that is not a Pi coding agent package or that has no `dist/cli.js` or `dist/index.js`. It logs the version and path of each selected SDK once.
 
 The integration tests check behavior: event-bus delivery, publication, and RPC execution. They do not compare version strings or file hashes. If the selected SDK lacks a required export, the test names it.
 

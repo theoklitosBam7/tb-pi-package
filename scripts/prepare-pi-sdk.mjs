@@ -12,6 +12,7 @@ if (!version || !target) {
 fs.mkdirSync(target, { recursive: true });
 fs.writeFileSync(path.join(target, "package.json"), JSON.stringify({ private: true }));
 
+// Send the install output to stderr so stdout carries only the parsed path line.
 execFileSync(
   "pnpm",
   [

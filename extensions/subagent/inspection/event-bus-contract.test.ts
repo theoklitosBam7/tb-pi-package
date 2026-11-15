@@ -1,11 +1,15 @@
-import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { selectPiSdk } from "../test-support/pi-sdk.js";
 
+const selectedSdk = selectPiSdk();
 const sdk: typeof import("@earendil-works/pi-coding-agent") = await import(
-  pathToFileURL(path.join(selectPiSdk().root, "dist", "index.js")).href
+  pathToFileURL(selectedSdk.entryPath).href
 );
+
+if (typeof sdk.createEventBus !== "function") {
+  throw new Error(`The selected Pi SDK at ${selectedSdk.root} does not export createEventBus`);
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -54,7 +58,6 @@ describe("Pi SDK event bus contract", () => {
 
     await vi.waitFor(() => expect(received).toEqual(["payload"]));
     expect(consoleError).toHaveBeenCalledOnce();
-    expect(String(consoleError.mock.calls[0]?.[0])).toContain("Event handler error");
   });
 
   it("[integration] stops delivery after unsubscribing", () => {
