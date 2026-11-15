@@ -331,9 +331,7 @@ describe("subagent inspector live bridge", () => {
     });
     await vi.waitFor(() => expect(fixture.children).toHaveLength(1));
     const launchResult = await execution;
-    const runId = launchResult.content
-      .find((item: { text?: string }) => item.text)
-      ?.text?.match(/"id":"([^"]+)"/)?.[1];
+    const runId = launchResult.details?.runs?.[0]?.id;
     if (!runId) throw new Error("Expected the async launch to return a run ID");
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
@@ -917,6 +915,19 @@ describe("subagent inspector TUI", () => {
     expect(text).toContain("queued");
     expect(text).toContain("Thinking: low");
     expect(text).not.toContain("running");
+    component.dispose();
+  });
+
+  it("uses a short run ID in the run list", () => {
+    const store = new AgentInspectorStore();
+    const id = "1063e371-3864-4f21-91d9-1e47886f4236";
+    store.queue({ id, agent: "worker", task: "Review" });
+    const { component } = inspectorView(store, 30, 100);
+
+    const text = component.render(100).join("\n");
+
+    expect(text).toContain("1063e371 · worker");
+    expect(text).not.toContain(id);
     component.dispose();
   });
 

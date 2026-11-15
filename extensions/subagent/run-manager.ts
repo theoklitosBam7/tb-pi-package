@@ -59,6 +59,7 @@ export type RunNotification =
       eventId: string;
       state: RunState;
       artifactPath?: string;
+      run: RunSnapshot;
     };
 
 export type ScheduleResult =
@@ -78,6 +79,7 @@ export interface RunManager extends RunOwner {
   scheduleBatch(input: RunOwner & { jobs: RunJob[] }): Promise<ScheduleResult>;
   listRuns(input: RunOwner): Promise<RunSnapshot[]>;
   getRun(input: RunOwner & { runId: string }): Promise<RunSnapshot | undefined>;
+  countRuns(input: RunOwner): { active: number; completed: number; failed: number };
   sendMessage(
     input: RunOwner & { runId: string; content: string; mode: "steer" | "follow_up" },
   ): Promise<SendMessageResult>;
@@ -190,6 +192,7 @@ export function createRunManager(options: RunManagerOptions): RunManager {
           agent: run.agent,
           eventId,
           artifactPath,
+          run: snapshot(run),
         });
       }
     } catch {
@@ -375,6 +378,17 @@ export function createRunManager(options: RunManagerOptions): RunManager {
       const run = findRun(input.runId);
       if (!run || !isOwnedRun(run, input)) return undefined;
       return snapshot(run);
+    },
+    countRuns(input) {
+      assertOwner(input);
+      const counts = { active: 0, completed: 0, failed: 0 };
+      for (const run of runs.values()) {
+        if (!isOwnedRun(run, input)) continue;
+        if (!run.terminal) counts.active += 1;
+        else if (run.state.kind === "completed") counts.completed += 1;
+        else counts.failed += 1;
+      }
+      return counts;
     },
     async sendMessage(input) {
       assertOwner(input);

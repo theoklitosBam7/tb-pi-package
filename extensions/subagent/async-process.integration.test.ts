@@ -54,10 +54,8 @@ function registerSubagentTools(
   return tools;
 }
 
-function parseToolText(result: { content: Array<{ text?: string }> }): Record<string, any> {
-  const text = result.content.find((item) => item.text)?.text;
-  if (!text) throw new Error("Tool returned no text content");
-  return JSON.parse(text);
+function toolDetails(result: { details?: Record<string, any> }): Record<string, any> {
+  return result.details ?? {};
 }
 
 afterEach(() => {
@@ -156,7 +154,7 @@ describe("asynchronous subagent process integration", () => {
         sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => "test-session" },
       },
     );
-    const launchedData = parseToolText(launched);
+    const launchedData = toolDetails(launched);
     const runId = launchedData.runs?.[0]?.id;
 
     expect(typeof runId).toBe("string");
@@ -173,10 +171,10 @@ describe("asynchronous subagent process integration", () => {
         sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => "test-session" },
       },
     );
-    const statusData = parseToolText(status);
+    const statusData = toolDetails(status);
 
     expect(statusData.run?.id).toBe(runId);
-    expect(statusData.run?.state?.kind).toBe("running");
+    expect(statusData.run?.status).toBe("running");
 
     fs.writeFileSync(releasePath, "release");
     await vi.waitFor(async () => {
@@ -191,7 +189,7 @@ describe("asynchronous subagent process integration", () => {
           sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => "test-session" },
         },
       );
-      expect(parseToolText(completed).run?.state?.kind).toBe("completed");
+      expect(toolDetails(completed).run?.status).toBe("completed");
     });
   }, 10_000);
 
@@ -236,7 +234,7 @@ describe("asynchronous subagent process integration", () => {
           undefined,
           context,
         );
-        const runId = parseToolText(launched).runs?.[0]?.id;
+        const runId = toolDetails(launched).runs?.[0]?.id;
         expect(typeof runId).toBe("string");
         await vi.waitFor(
           async () => {
@@ -247,9 +245,9 @@ describe("asynchronous subagent process integration", () => {
               undefined,
               context,
             );
-            expect(parseToolText(status).run?.state).toMatchObject({
-              kind: "timed-out",
-              result: { value: { termination: { kind: "watchdog", cleanup: "unknown" } } },
+            expect(toolDetails(status).run).toMatchObject({
+              status: "timed out",
+              termination: { kind: "watchdog", cleanup: "unknown" },
             });
           },
           { timeout: 10_000 },
@@ -379,7 +377,7 @@ describe("asynchronous subagent process integration", () => {
           undefined,
           context,
         );
-        const runs = parseToolText(launched).runs;
+        const runs = toolDetails(launched).runs;
         const aRunId = runs?.[0]?.id;
         bRunId = runs?.[1]?.id;
         expect(typeof aRunId).toBe("string");
@@ -397,23 +395,23 @@ describe("asynchronous subagent process integration", () => {
             undefined,
             context,
           );
-          return parseToolText(result).run;
+          return toolDetails(result).run;
         };
         await vi.waitFor(async () => {
           const [aRun, bRun] = await Promise.all([statusFor(aRunId!), statusFor(bRunId!)]);
-          expect(aRun?.state?.kind).toBe("completed");
-          expect(bRun?.state?.kind).toBe("running");
+          expect(aRun?.status).toBe("completed");
+          expect(bRun?.status).toBe("running");
         });
         const aRun = await statusFor(aRunId);
-        expect(aRun?.state?.result?.artifactPath).toBeTruthy();
-        expect(fs.readFileSync(aRun.state.result.artifactPath, "utf8")).toContain(
+        expect(aRun?.artifactPath).toBeTruthy();
+        expect(fs.readFileSync(aRun.artifactPath, "utf8")).toContain(
           "A completed while B was active.",
         );
 
         await vi.waitFor(async () => {
           const bRun = await statusFor(bRunId!);
           expect(bRun?.reports).toContain("B is active at its report checkpoint.");
-          expect(bRun?.state?.kind).toBe("running");
+          expect(bRun?.status).toBe("running");
         });
         const sendResult = await tools.agent_send.execute(
           "steer-b",
@@ -422,7 +420,10 @@ describe("asynchronous subagent process integration", () => {
           undefined,
           context,
         );
-        expect(parseToolText(sendResult)).toMatchObject({ kind: "accepted", outcome: "pending" });
+        expect(toolDetails(sendResult).result).toMatchObject({
+          kind: "accepted",
+          outcome: "pending",
+        });
         await vi.waitFor(() => {
           const messages = fs.existsSync(bSteeredPath)
             ? fs.readFileSync(bSteeredPath, "utf8").trim().split("\n")
@@ -432,7 +433,7 @@ describe("asynchronous subagent process integration", () => {
         await vi.waitFor(async () => {
           const bRun = await statusFor(bRunId!);
           expect(bRun?.messages[0]?.outcome).toBe("accepted-by-child");
-          expect(bRun?.state?.kind).toBe("running");
+          expect(bRun?.status).toBe("running");
         });
 
         const canceled = await tools.agent_cancel.execute(
@@ -442,13 +443,13 @@ describe("asynchronous subagent process integration", () => {
           undefined,
           context,
         );
-        expect(parseToolText(canceled)).toEqual({ canceled: true });
+        expect(toolDetails(canceled)).toMatchObject({ canceled: true });
         let canceledRun: Record<string, any> | undefined;
         await vi.waitFor(async () => {
           canceledRun = await statusFor(bRunId!);
-          expect(canceledRun?.state?.kind).toBe("aborted");
+          expect(canceledRun?.status).toBe("aborted");
         });
-        expect(canceledRun?.state?.result?.value?.termination).toEqual({
+        expect(canceledRun?.termination).toEqual({
           kind: "abort",
           cleanup: "unknown",
         });
@@ -472,7 +473,7 @@ describe("asynchronous subagent process integration", () => {
             undefined,
             context,
           );
-          if (parseToolText(state).run?.state?.kind === "running") {
+          if (toolDetails(state).run?.status === "running") {
             await tools.agent_cancel.execute(
               "cleanup-cancel",
               { runId: bRunId },
@@ -548,7 +549,7 @@ describe("asynchronous subagent process integration", () => {
         undefined,
         context,
       );
-      const runs = parseToolText(launched).runs;
+      const runs = toolDetails(launched).runs;
       const queuedRunId = runs?.[4]?.id;
       expect(typeof queuedRunId).toBe("string");
       await vi.waitFor(() => {
@@ -565,7 +566,7 @@ describe("asynchronous subagent process integration", () => {
         undefined,
         context,
       );
-      expect(parseToolText(canceled)).toEqual({ canceled: true });
+      expect(toolDetails(canceled)).toMatchObject({ canceled: true });
       let queuedStatus: Record<string, any> | undefined;
       await vi.waitFor(async () => {
         const status = await tools.agent_status.execute(
@@ -575,10 +576,10 @@ describe("asynchronous subagent process integration", () => {
           undefined,
           context,
         );
-        queuedStatus = parseToolText(status).run;
-        expect(queuedStatus?.state?.kind).toBe("aborted");
+        queuedStatus = toolDetails(status).run;
+        expect(queuedStatus?.status).toBe("aborted");
       });
-      expect(queuedStatus?.state?.result?.value?.termination).toBeUndefined();
+      expect(queuedStatus?.termination).toBeUndefined();
       expect(spawn).toHaveBeenCalledTimes(4);
       expect(
         notifications.filter((notification) => notification.customType === "subagent-result"),
@@ -685,7 +686,7 @@ describe("asynchronous subagent process integration", () => {
         undefined,
         context,
       );
-      const runs = parseToolText(launched).runs;
+      const runs = toolDetails(launched).runs;
       expect(runs).toHaveLength(5);
       await vi.waitFor(() => {
         for (let number = 1; number <= 4; number += 1) {
@@ -758,7 +759,7 @@ describe("asynchronous subagent process integration", () => {
         undefined,
         context,
       );
-      const runId = parseToolText(launched).runs?.[0]?.id;
+      const runId = toolDetails(launched).runs?.[0]?.id;
       expect(typeof runId).toBe("string");
       await vi.waitFor(() => expect(fs.existsSync(firstAttemptPath)).toBe(true));
       expect(
@@ -766,11 +767,11 @@ describe("asynchronous subagent process integration", () => {
       ).toHaveLength(0);
       const statusTool = () =>
         tools.agent_status.execute("retry-status", { runId }, undefined, undefined, context);
-      expect(parseToolText(await statusTool()).run?.state?.kind).toBe("running");
+      expect(toolDetails(await statusTool()).run?.status).toBe("running");
 
       fs.writeFileSync(releasePath, "continue");
       await vi.waitFor(async () =>
-        expect(parseToolText(await statusTool()).run?.state?.kind).toBe("completed"),
+        expect(toolDetails(await statusTool()).run?.status).toBe("completed"),
       );
       const terminal = notifications.filter((message) => message.customType === "subagent-result");
       expect(terminal).toHaveLength(1);
@@ -838,7 +839,7 @@ describe("asynchronous subagent process integration", () => {
         undefined,
         firstContext,
       );
-      const runs = parseToolText(launched).runs;
+      const runs = toolDetails(launched).runs;
       await vi.waitFor(() => {
         for (let number = 1; number <= 4; number += 1)
           expect(fs.existsSync(path.join(readyDirectory, String(number)))).toBe(true);
@@ -867,7 +868,7 @@ describe("asynchronous subagent process integration", () => {
         undefined,
         newContext,
       );
-      expect(parseToolText(newSessionStatus).runs).toEqual([]);
+      expect(toolDetails(newSessionStatus).runs).toEqual([]);
     },
     20_000,
   );
@@ -945,7 +946,7 @@ describe("asynchronous subagent process integration", () => {
         undefined,
         context,
       );
-      const runId = parseToolText(launched).runs?.[0]?.id;
+      const runId = toolDetails(launched).runs?.[0]?.id;
       expect(typeof runId).toBe("string");
       await vi.waitFor(() => expect(fs.existsSync(readyPath)).toBe(true));
 
@@ -957,15 +958,15 @@ describe("asynchronous subagent process integration", () => {
           undefined,
           context,
         );
-      expect(parseToolText(await statusTool()).run?.state?.kind).toBe("running");
+      expect(toolDetails(await statusTool()).run?.status).toBe("running");
       fs.mkdirSync(outputPath, { recursive: true });
       fs.writeFileSync(releasePath, "release");
       await vi.waitFor(async () =>
-        expect(parseToolText(await statusTool()).run?.state?.kind).toBe("failed"),
+        expect(toolDetails(await statusTool()).run?.status).toBe("failed"),
       );
 
-      const status = parseToolText(await statusTool()).run;
-      expect(status?.state?.error).toContain("Unable to write subagent artifact");
+      const status = toolDetails(await statusTool()).run;
+      expect(status?.error).toContain("Unable to write subagent artifact");
       expect(JSON.stringify(status)).not.toContain("artifactPath");
       expect(fs.statSync(outputPath).isDirectory()).toBe(true);
       const terminal = notifications.filter((message) => message.customType === "subagent-result");

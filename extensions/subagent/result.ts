@@ -96,6 +96,7 @@ interface SingleResultData {
   step?: number;
   outputPath?: string;
   displayItems?: ResultDisplayItem[];
+  preview?: string;
 }
 
 export type ResultThinking =
@@ -303,6 +304,36 @@ export function isCompletedResult(result: Pick<SingleResult, "exitCode" | "stopR
   return getResultStatus(result) === "completed";
 }
 
+const MAX_PREVIEW_CHARS = 400;
+const MAX_STORED_STDERR_CHARS = 4_000;
+
+function buildPreview(text: string): string {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const joined = lines.join("\n");
+  return joined.length <= MAX_PREVIEW_CHARS ? joined : `${joined.slice(0, MAX_PREVIEW_CHARS - 1)}…`;
+}
+
+/**
+ * Reduce a result to what a custom message needs: status facts, usage, artifact path, and a
+ * short preview. Child tool history and model provenance stay in the artifact.
+ */
+export function slimResultForMessage(result: SingleResult): SingleResult {
+  return {
+    ...result,
+    messages: [],
+    stderr:
+      result.stderr.length > MAX_STORED_STDERR_CHARS
+        ? `${result.stderr.slice(0, MAX_STORED_STDERR_CHARS - 1)}…`
+        : result.stderr,
+    displayItems: undefined,
+    modelProvenance: undefined,
+  };
+}
+
 function getFailureDiagnostics(result: Pick<SingleResult, "errorMessage" | "stderr">): {
   errorMessage?: string;
   stderr?: string;
@@ -361,5 +392,6 @@ export async function writeResultArtifact(options: {
   const diagnosticText = [diagnostics.errorMessage, diagnostics.stderr]
     .filter(Boolean)
     .join("\n\n");
+  result.preview = buildPreview(finalOutput || diagnosticText);
   return finalOutput || diagnosticText || "(no output)";
 }
