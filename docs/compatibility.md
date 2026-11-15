@@ -22,4 +22,4 @@ The integration tests check behavior: event-bus delivery, publication, and RPC e
 
 ## Upgrades
 
-Update the development dependency to test a new SDK. Change the peer range only after the integration tests pass at the new minimum; the compatibility workflow then tests that minimum.
+Update the development dependency to test a new SDK. Change the peer range only after `pnpm test:integration` passes at the new minimum; the compatibility workflow runs that command against the minimum.

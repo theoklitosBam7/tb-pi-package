@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { piSdkOverride, selectPiSdk } from "./pi-sdk.js";
 
 const packageName = "@earendil-works/pi-coding-agent";
@@ -45,6 +45,25 @@ describe("piSdkOverride", () => {
     expect(piSdkOverride({ PI_SDK_PATH: "  ", INSPECTION_SDK_PATH: "/legacy" })).toBe("/legacy");
     expect(piSdkOverride({})).toBeUndefined();
     expect(piSdkOverride({ PI_SDK_PATH: "  " })).toBeUndefined();
+  });
+
+  it("warns once when only the deprecated alias is set", async () => {
+    vi.resetModules();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const fresh = await import("./pi-sdk.js");
+
+      expect(fresh.piSdkOverride({ PI_SDK_PATH: "/preferred" })).toBe("/preferred");
+      expect(warn).not.toHaveBeenCalled();
+
+      expect(fresh.piSdkOverride({ INSPECTION_SDK_PATH: "/legacy" })).toBe("/legacy");
+      expect(fresh.piSdkOverride({ INSPECTION_SDK_PATH: "/legacy" })).toBe("/legacy");
+      expect(warn).toHaveBeenCalledOnce();
+      expect(String(warn.mock.calls[0]?.[0])).toContain("INSPECTION_SDK_PATH");
+      expect(String(warn.mock.calls[0]?.[0])).toContain("PI_SDK_PATH");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

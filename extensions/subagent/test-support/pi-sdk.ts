@@ -14,9 +14,20 @@ export interface PiSdk {
   require: NodeRequire;
 }
 
+let warnedLegacyOverride = false;
+
 export function piSdkOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const override = env.PI_SDK_PATH?.trim() || env.INSPECTION_SDK_PATH?.trim();
-  return override === undefined || override.length === 0 ? undefined : override;
+  const preferred = env.PI_SDK_PATH?.trim();
+  if (preferred) return preferred;
+
+  const legacy = env.INSPECTION_SDK_PATH?.trim();
+  if (!legacy) return undefined;
+
+  if (!warnedLegacyOverride) {
+    warnedLegacyOverride = true;
+    console.warn("INSPECTION_SDK_PATH is deprecated; set PI_SDK_PATH instead.");
+  }
+  return legacy;
 }
 
 function findPackage(startDirectory: string, name: string): string {
