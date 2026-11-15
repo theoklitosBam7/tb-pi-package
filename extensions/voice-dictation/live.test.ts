@@ -22,12 +22,12 @@ describe("Foundry live transcription", () => {
     }
     expect(await transcribePcm(session, pcm(), (text) => updates.push(text))).toBe("Hello world.");
   });
-  it.skipIf(
-    process.platform !== "darwin" ||
-      spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status !== 0,
-  )(
+  it.skipIf(process.platform !== "darwin")(
     "[process integration] keeps the transcript after Enter stops FFmpeg with exit code 255",
-    async () => {
+    async (context) => {
+      if (spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status !== 0) {
+        context.skip("ffmpeg is not installed");
+      }
       const recorder = spawn(
         "ffmpeg",
         [
