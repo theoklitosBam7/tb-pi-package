@@ -413,3 +413,30 @@ describe("RunManager", () => {
     activeCleanup.resolve({ artifactPath: "/active-final.md" });
   });
 });
+
+describe("RunManager.countRuns", () => {
+  it("counts active and terminal runs synchronously", async () => {
+    const manager = createRunManager({ ...owner, concurrency: 2 });
+    const gate = deferred<RunResult>();
+    const scheduled = await manager.scheduleBatch({
+      ...owner,
+      jobs: [
+        job("active", () => gate.promise),
+        job("done", async () => {
+          throw new Error("failed");
+        }),
+        job("queued", () => gate.promise),
+      ],
+    });
+    if (scheduled.kind !== "scheduled") throw new Error("Expected scheduled runs");
+
+    await waitFor(async () => {
+      const runs = await manager.listRuns(owner);
+      return runs.filter((run) => run.state.kind === "failed").length === 1;
+    });
+
+    expect(manager.countRuns(owner)).toEqual({ active: 2, completed: 0, failed: 1 });
+    gate.resolve({ artifactPath: "/active.md" });
+    await waitFor(() => manager.countRuns(owner).active === 0);
+  });
+});

@@ -7,6 +7,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "../agents/agents.js";
+import { shortRunId } from "../presentation.js";
 import { formatModelProvenance, type ModelProvenance } from "../result.js";
 
 const MAX_COMPLETED_RUNS = 50;
@@ -588,7 +589,7 @@ export class AgentInspectorComponent {
       });
     for (const run of runs) {
       const isSelected = selected?.id === run.id;
-      const head = `${run.id} · ${run.agent} · `;
+      const head = `${shortRunId(run.id)} · ${run.agent} · `;
       const tail = ` · ${run.task.replace(/\s+/g, " ")}`;
       const status = `${this.statusIcon(run.status)} ${this.statusText(run.status)}`;
       entries.push({

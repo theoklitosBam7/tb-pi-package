@@ -9,6 +9,7 @@ import { getPackageDir, initTheme } from "@earendil-works/pi-coding-agent";
 import type { Message } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { Value } from "typebox/value";
+import { getPersistedSubagentUsage } from "../lib/usage.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -31,6 +32,7 @@ import {
   isCompletedResult,
   type ResultThinking,
   type SingleResult,
+  slimResultForMessage,
   writeResultArtifact,
 } from "./result.js";
 
@@ -475,6 +477,7 @@ describe("artifact-backed rendering", () => {
       expect(result.displayItems).toEqual([
         { type: "toolCall", name: "read", args: { path: "/tmp/input.ts" } },
       ]);
+      expect(result.preview).toBe("done");
 
       const tools: Record<string, any> = {};
       subagentExtension({
@@ -4355,5 +4358,379 @@ describe("installAbortHandler", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("asynchronous tool presentation", () => {
+  const createTools = () => {
+    const tools: Record<string, any> = {};
+    const messageRenderers = new Map<string, any>();
+    subagentExtension({
+      events: createEventBus(),
+      on() {},
+      sendMessage() {},
+      registerTool(tool: any) {
+        tools[tool.name] = tool;
+      },
+      registerCommand() {},
+      registerShortcut() {},
+      registerMessageRenderer(customType: string, renderer: any) {
+        messageRenderers.set(customType, renderer);
+      },
+    } as any);
+    return { tools, messageRenderers };
+  };
+
+  const createContext = (sessionId = "async-tools-session") => ({
+    cwd: process.cwd(),
+    hasUI: false,
+    sessionManager: {
+      getSessionFile: () => path.join(os.tmpdir(), "async-tools-session.jsonl"),
+      getSessionId: () => sessionId,
+    },
+  });
+
+  it("reports an empty run list without JSON", async () => {
+    const { tools } = createTools();
+    const result = await tools.agent_status.execute(
+      "status-empty",
+      {},
+      undefined,
+      undefined,
+      createContext(),
+    );
+
+    expect(result.content[0].text).toBe("No asynchronous runs in this session.");
+    expect(result.details).toEqual({ runs: [] });
+  });
+
+  it("reports a missing run clearly", async () => {
+    const { tools } = createTools();
+    const result = await tools.agent_status.execute(
+      "status-missing",
+      { runId: "run-missing" },
+      undefined,
+      undefined,
+      createContext(),
+    );
+
+    expect(result.content[0].text).toContain("No run found for ID run-missing");
+    expect(result.details).toEqual({ run: null, runId: "run-missing" });
+
+    const rendered = tools.agent_status
+      .renderResult(
+        result,
+        { expanded: false },
+        { bold: (text: string) => text, fg: (_color: string, text: string) => text },
+        {},
+      )
+      .render(80)
+      .join("\n");
+    expect(rendered).toContain("State: ✗ not found");
+    expect(rendered).toContain("run-missing");
+  });
+
+  it("explains a rejected message without JSON", async () => {
+    const { tools } = createTools();
+    const result = await tools.agent_send.execute(
+      "send-missing",
+      { runId: "run-missing", message: "Include the token refresh path", mode: "steer" },
+      undefined,
+      undefined,
+      createContext(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe("Message rejected: run run-missing was not found.");
+    expect(result.details).toMatchObject({
+      runId: "run-missing",
+      mode: "steer",
+      result: { kind: "rejected", reason: "not-found" },
+    });
+  });
+
+  it("explains a cancellation that did not apply without JSON", async () => {
+    const { tools } = createTools();
+    const result = await tools.agent_cancel.execute(
+      "cancel-missing",
+      { runId: "run-missing" },
+      undefined,
+      undefined,
+      createContext(),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(
+      "Run run-missing could not be canceled: not found or already terminal.",
+    );
+    expect(result.details).toEqual({ runId: "run-missing", canceled: false });
+  });
+});
+
+describe("slimResultForMessage", () => {
+  it("keeps the facts a notification needs and drops the child transcript", () => {
+    const result: SingleResult = {
+      agent: "generalist",
+      agentSource: "user",
+      task: "Review the parser",
+      exitCode: 0,
+      messages: [],
+      stderr: "x".repeat(10_000),
+      thinkingKind: "default",
+      usage: {
+        input: 100,
+        output: 20,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.01,
+        contextTokens: 120,
+        turns: 1,
+      },
+      outputPath: "/tmp/result.md",
+      preview: "The parser is sound.",
+      displayItems: [{ type: "toolCall", name: "read", args: { path: "/tmp/parser.ts" } }],
+      modelProvenance: {
+        requested: "inherit",
+        resolved: ["p/m"],
+        attempted: ["p/m"],
+        dispatch: ["p/m"],
+        response: ["p/m"],
+      },
+    };
+
+    const slim = slimResultForMessage(result);
+
+    expect(slim.displayItems).toBeUndefined();
+    expect(slim.modelProvenance).toBeUndefined();
+    expect(slim.messages).toEqual([]);
+    expect(slim.outputPath).toBe("/tmp/result.md");
+    expect(slim.preview).toBe("The parser is sound.");
+    expect(slim.usage).toEqual(result.usage);
+    expect(slim.stderr.length).toBeLessThanOrEqual(4_000);
+
+    const usage = getPersistedSubagentUsage({
+      usageVersion: 3,
+      mode: "single",
+      agentScope: "user",
+      projectAgentsDir: null,
+      results: [slim],
+    });
+    expect(usage.recognized).toBe(true);
+    expect(usage.runs).toBe(1);
+    expect(usage.totals).toMatchObject({ input: 100, output: 20, cost: 0.01 });
+  });
+});
+
+describe("subagent message renderers", () => {
+  const theme = {
+    bold: (text: string) => text,
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+  };
+
+  const registerRenderers = () => {
+    const renderers = new Map<string, any>();
+    subagentExtension({
+      events: createEventBus(),
+      on() {},
+      sendMessage() {},
+      registerTool() {},
+      registerCommand() {},
+      registerShortcut() {},
+      registerMessageRenderer(customType: string, renderer: any) {
+        renderers.set(customType, renderer);
+      },
+    } as any);
+    return renderers;
+  };
+
+  const runId = "1063e371-3864-4f21-91d9-1e47886f4236";
+  const artifactPath =
+    "/home/tester/.pi/agent/sessions/--home-tester-dev-example-project--/2026-11-07T15-57-58-591Z_01a1b6bb/2026-11-07T15-57-58-591Z_01a1b6bb-call_5195-single-generalist.md";
+
+  it("renders a terminal notification as a run card without internal labels", () => {
+    const renderer = registerRenderers().get("subagent-result");
+    const rendered = renderer(
+      {
+        content: `Subagent generalist completed (run ${runId}).`,
+        details: {
+          runId,
+          usageVersion: 3,
+          mode: "single",
+          results: [
+            {
+              agent: "generalist",
+              agentSource: "user",
+              task: "Implement documentation phase 7 only.",
+              exitCode: 0,
+              messages: [],
+              stderr: "",
+              thinkingKind: "default",
+              usage: {
+                input: 52_340,
+                output: 6_120,
+                cacheRead: 326_000,
+                cacheWrite: 0,
+                cost: 0.0115,
+                contextTokens: 58_460,
+                turns: 13,
+              },
+              outputPath: artifactPath,
+              preview: "Documentation phase 7 is complete.",
+            },
+          ],
+          run: {
+            id: runId,
+            agent: "generalist",
+            task: "Implement documentation phase 7 only.",
+            status: "completed",
+            reports: [],
+            reportCount: 0,
+            messages: [
+              {
+                id: "message-1",
+                mode: "steer",
+                outcome: "accepted-by-child",
+                content: "Include the token refresh path",
+              },
+            ],
+            messageCount: 1,
+            artifactPath,
+            usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, cost: 0.01, turns: 4 },
+            preview: "Documentation phase 7 is complete.",
+          },
+        },
+      },
+      { expanded: false },
+      theme,
+    )
+      .render(120)
+      .join("\n");
+
+    expect(rendered).toContain("generalist");
+    expect(rendered).toContain("1063e371");
+    expect(rendered).toContain("Documentation phase 7 is complete.");
+    expect(rendered).toContain("Artifact");
+    expect(rendered).not.toContain("[subagent-result]");
+    expect(rendered).not.toContain(runId);
+  });
+
+  it("shows the full artifact path when expanded", () => {
+    const renderer = registerRenderers().get("subagent-result");
+    const rendered = renderer(
+      {
+        content: "Subagent generalist completed.",
+        details: {
+          runId,
+          usageVersion: 3,
+          mode: "single",
+          results: [],
+          run: {
+            id: runId,
+            agent: "generalist",
+            task: "Implement documentation phase 7 only.",
+            status: "completed",
+            reports: [],
+            reportCount: 0,
+            messages: [
+              {
+                id: "message-1",
+                mode: "steer",
+                outcome: "accepted-by-child",
+                content: "Include the token refresh path",
+              },
+            ],
+            messageCount: 1,
+            artifactPath,
+          },
+        },
+      },
+      { expanded: true },
+      theme,
+    )
+      .render(200)
+      .join("\n");
+
+    expect(rendered).toContain(`Full artifact  ${artifactPath}`);
+    expect(rendered).toContain("message-1 steer accepted-by-child");
+    expect(rendered).toContain("Include the token refresh path");
+  });
+
+  it("renders a report notification with the report text and a short run ID", () => {
+    const renderer = registerRenderers().get("subagent-report");
+    const rendered = renderer(
+      {
+        content: `Subagent scout report (run ${runId}):\nDiscovery complete.`,
+        details: {
+          runId,
+          eventId: `${runId}:1`,
+          agent: "scout",
+        },
+      },
+      { expanded: false },
+      theme,
+    )
+      .render(120)
+      .join("\n");
+
+    expect(rendered).toContain("scout");
+    expect(rendered).toContain("1063e371");
+    expect(rendered).toContain("Discovery complete.");
+    expect(rendered).not.toContain(`${runId}:1`);
+  });
+});
+
+describe("collapsed synchronous card", () => {
+  it("always shows the expand hint", () => {
+    const tools: Record<string, any> = {};
+    subagentExtension({
+      events: createEventBus(),
+      on() {},
+      registerTool(tool: any) {
+        tools[tool.name] = tool;
+      },
+      registerCommand() {},
+      registerShortcut() {},
+    } as any);
+    const rendered = tools.agent
+      .renderResult(
+        {
+          content: [{ type: "text", text: "Agent completed." }],
+          details: {
+            mode: "single",
+            agentScope: "user",
+            projectAgentsDir: null,
+            results: [
+              {
+                agent: "worker",
+                agentSource: "user",
+                task: "Review",
+                exitCode: 0,
+                messages: [],
+                stderr: "",
+                thinkingKind: "default",
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 0,
+                },
+                outputPath: "/tmp/result.md",
+                preview: "Done.",
+              },
+            ],
+          },
+        },
+        { expanded: false, isPartial: false },
+        { bold: (text: string) => text, fg: (_color: string, text: string) => text },
+        {},
+      )
+      .render(100)
+      .join("\n");
+
+    expect(rendered).toContain("(Ctrl+O to expand)");
   });
 });

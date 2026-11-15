@@ -170,8 +170,8 @@ export default function registerFixtureProvider(pi) {
         const terminalVisible = contextMessages.some(
           (message) =>
             message.role === "user" &&
-            message.content.startsWith("Subagent ") &&
-            message.content.includes(" completed ("),
+            message.content.startsWith("✓ subagent ") &&
+            message.content.includes(" completed"),
         );
         const childFinished = fs.existsSync(marker("child-finished"));
         record({ kind: "parent_model_call", visibleReports, childFinished, terminalVisible });

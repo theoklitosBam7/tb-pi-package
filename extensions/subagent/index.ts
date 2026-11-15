@@ -24,9 +24,18 @@ import {
   type ExtensionContext,
   getMarkdownTheme,
   getPackageDir,
+  type Theme,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+  Box,
+  type Component,
+  Container,
+  Markdown,
+  Spacer,
+  Text,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { createInspectionPublisher } from "./inspection/inspection-publisher.js";
 import { Type } from "typebox";
 import {
@@ -73,16 +82,40 @@ import {
   isCompletedResult,
   type ResultThinking,
   type SingleResult,
+  slimResultForMessage,
   type WatchdogTermination,
   writeResultArtifact,
 } from "./result.js";
 import { createRpcPeer, type RpcPeer } from "./rpc/rpc-peer.js";
 import { createReportServer, getReportExtensionPath, type ReportServer } from "./report.js";
 import {
+  formatCancelReport,
+  formatLaunchReport,
+  formatMissingRun,
+  formatMissingRunCard,
+  formatReportNotification,
+  formatSendReport,
+  formatStatusCard,
+  formatStatusList,
+  formatTerminalReport,
+  formatUsage as formatUsageStats,
+  messageTruncationNotice,
+  reportBody,
+  reportTruncationNotice,
+  sanitizeText,
+  shortPath,
+  shortRunId,
+  statusColor,
+  statusSymbol,
+  toRunSummary,
+  type RunSummary,
+} from "./presentation.js";
+import {
   createRunManager,
   type RunContext,
   type RunManager,
   type RunOwner,
+  type SendMessageResult,
 } from "./run-manager.js";
 
 /**
@@ -270,39 +303,6 @@ function getMessageLifecycleKey(value: unknown, allowPending = false): string | 
   return `${role}:${timestamp}`;
 }
 
-function formatTokens(count: number): string {
-  if (count < 1000) return count.toString();
-  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1000000) return `${Math.round(count / 1000)}k`;
-  return `${(count / 1000000).toFixed(1)}M`;
-}
-
-function formatUsageStats(
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    cost: number;
-    contextTokens?: number;
-    turns?: number;
-  },
-  model?: string,
-): string {
-  const parts: string[] = [];
-  if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-  if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-  if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-  if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-  if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
-  if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-  if (usage.contextTokens && usage.contextTokens > 0) {
-    parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
-  }
-  if (model) parts.push(model);
-  return parts.join(" ");
-}
-
 function formatResultUsageStats(
   result: Pick<SingleResult, "usage" | "descendantUsage">,
   model?: string,
@@ -387,6 +387,187 @@ function formatToolCall(
 type SubagentDetails = Omit<PersistedSubagentDetails, "results"> & {
   results: SingleResult[];
 };
+
+interface AgentStatusDetails {
+  runs?: RunSummary[];
+  run?: RunSummary | null;
+  runId?: string;
+}
+
+interface AgentSendDetails {
+  runId: string;
+  mode: "steer" | "follow_up";
+  result: SendMessageResult;
+}
+
+interface AgentCancelDetails {
+  runId: string;
+  canceled: boolean;
+}
+
+interface AsyncLaunchDetails extends SubagentDetails {
+  runs: RunSummary[];
+}
+
+interface SubagentResultDetails extends SubagentDetails {
+  runId: string;
+  run?: RunSummary;
+}
+
+interface SubagentReportDetails {
+  runId: string;
+  eventId: string;
+  agent?: string;
+}
+
+class LeftGutter implements Component {
+  constructor(
+    private readonly child: Component,
+    private readonly border: (text: string) => string,
+  ) {}
+
+  invalidate(): void {
+    this.child.invalidate?.();
+  }
+
+  render(width: number): string[] {
+    if (width < 2) return this.child.render(width);
+    const prefix = width >= 3 ? `${this.border("▌")} ` : this.border("▌");
+    const contentWidth = Math.max(1, width - visibleWidth(prefix));
+    return this.child.render(contentWidth).map((line) => `${prefix}${line}`);
+  }
+}
+
+interface CustomMessageView<T> {
+  content: string | Array<{ type: string; text?: string }>;
+  details?: T;
+}
+
+function messagePanel(theme: Theme, build: (content: Container) => void): Component {
+  const panel = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+  const content = new Container();
+  build(content);
+  panel.addChild(new LeftGutter(content, (text) => theme.fg("borderAccent", text)));
+  return panel;
+}
+
+function statusResultBody(details: AgentStatusDetails | undefined, fallback: string): string {
+  if (details?.run) return formatStatusCard(details.run, { compact: true });
+  if (details?.runId) return formatMissingRunCard(details.runId);
+  if (details?.runs) return formatStatusList(details.runs, { compact: true });
+  return fallback;
+}
+
+function renderSubagentResultMessage(
+  message: CustomMessageView<SubagentResultDetails>,
+  options: { expanded: boolean },
+  theme: Theme,
+): Component {
+  const details = message.details;
+  const run = details?.run;
+  const result = details?.results?.[0];
+  return messagePanel(theme, (content) => {
+    const status = run?.status;
+    const icon = status
+      ? theme.fg(statusColor(status), statusSymbol(status))
+      : theme.fg("muted", "•");
+    const agent = sanitizeText(run?.agent ?? result?.agent ?? "subagent");
+    const runId = details?.runId;
+    const header =
+      `${icon} ${theme.bold(theme.fg("customMessageLabel", "subagent"))} ` +
+      `${theme.fg("accent", agent)}` +
+      (runId ? theme.fg("muted", ` ${shortRunId(runId)}`) : "");
+    content.addChild(new Text(header, 0, 0));
+
+    const usage = result ? formatResultUsageStats(result) : "";
+    const meta = [status ? `Run ${status}` : "", usage].filter(Boolean).join(" · ");
+    if (meta) content.addChild(new Text(theme.fg("muted", meta), 0, 0));
+
+    const task = run?.task ?? result?.task;
+    if (task) content.addChild(new Text(theme.fg("dim", sanitizeText(task).split("\n")[0]), 0, 0));
+
+    const artifactPath = run?.artifactPath ?? result?.outputPath;
+    if (artifactPath) {
+      const shown = shortPath(artifactPath, { maxWidth: options.expanded ? 200 : 80 });
+      content.addChild(new Text(theme.fg("muted", `Artifact  ${shown}`), 0, 0));
+    }
+
+    const preview = run?.preview ?? result?.preview;
+    if (preview) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Text(theme.fg("customMessageText", preview), 0, 0));
+    }
+
+    if (!options.expanded) return;
+
+    if (run && run.reportCount > 0) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Text(theme.fg("muted", `Reports (${run.reportCount})`), 0, 0));
+      for (const report of run.reports) {
+        content.addChild(new Text(theme.fg("dim", report), 0, 0));
+      }
+      const notice = reportTruncationNotice(run);
+      if (notice) content.addChild(new Text(theme.fg("muted", notice), 0, 0));
+    }
+    if (run && run.messageCount > 0) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Text(theme.fg("muted", `Messages (${run.messageCount})`), 0, 0));
+      for (const item of run.messages) {
+        content.addChild(
+          new Text(
+            theme.fg("dim", `${item.id} ${item.mode} ${item.outcome}: "${item.content}"`),
+            0,
+            0,
+          ),
+        );
+      }
+      const notice = messageTruncationNotice(run);
+      if (notice) content.addChild(new Text(theme.fg("muted", notice), 0, 0));
+    }
+    if (result?.errorMessage) {
+      content.addChild(
+        new Text(theme.fg("error", `Error: ${sanitizeText(result.errorMessage)}`), 0, 0),
+      );
+    }
+    if (result?.stderr) {
+      content.addChild(new Text(theme.fg("dim", sanitizeText(result.stderr)), 0, 0));
+    }
+    if (artifactPath) {
+      content.addChild(new Text(theme.fg("muted", `Full artifact  ${artifactPath}`), 0, 0));
+    }
+  });
+}
+
+function renderSubagentReportMessage(
+  message: CustomMessageView<SubagentReportDetails>,
+  _options: { expanded: boolean },
+  theme: Theme,
+): Component {
+  const details = message.details;
+  return messagePanel(theme, (content) => {
+    const agent = details?.agent ? theme.fg("accent", sanitizeText(details.agent)) : "";
+    const runId = details?.runId ? theme.fg("muted", ` ${shortRunId(details.runId)}`) : "";
+    content.addChild(
+      new Text(
+        `${theme.fg("customMessageLabel", "✉ subagent report")}${agent ? ` ${agent}` : ""}${runId}`,
+        0,
+        0,
+      ),
+    );
+    content.addChild(new Spacer(1));
+    content.addChild(
+      new Markdown(
+        sanitizeText(reportBody(typeof message.content === "string" ? message.content : "")),
+        0,
+        0,
+        getMarkdownTheme(),
+        {
+          color: (text) => theme.fg("customMessageText", text),
+        },
+      ),
+    );
+  });
+}
 
 type DisplayItem =
   | { type: "text"; text: string }
@@ -1558,29 +1739,53 @@ export default function (pi: ExtensionAPI) {
           if (event.type === "terminal") {
             asyncRunMetadata.delete(event.runId);
           }
-          const content =
-            event.type === "report"
-              ? `Subagent ${event.agent} (${event.runId}) report ${event.eventId}:\n${event.content}`
-              : `Subagent ${event.agent} (${event.runId}) ${event.state.kind} (${event.eventId})${event.artifactPath ? `. Artifact: ${event.artifactPath}` : ""}`;
+          const notificationRun: RunSummary | undefined =
+            event.type === "terminal"
+              ? { ...toRunSummary(event.run), error: undefined }
+              : undefined;
+          let content = "";
+          if (event.type === "report") {
+            content = formatReportNotification({
+              agent: event.agent,
+              runId: event.runId,
+              content: event.content,
+            });
+          } else if (notificationRun) {
+            const counts = manager?.countRuns(owner) ?? { active: 0, completed: 0, failed: 0 };
+            const current = event.state.kind === "completed" ? "completed" : "failed";
+            content = formatTerminalReport({
+              run: notificationRun,
+              otherRuns: { ...counts, [current]: Math.max(0, counts[current] - 1) },
+            });
+          }
           const result =
             event.type === "terminal" && "result" in event.state
               ? event.state.result?.value
               : undefined;
+          const slimResults =
+            result && typeof result === "object"
+              ? [slimResultForMessage(result as SingleResult)]
+              : [];
           pi.sendMessage(
             {
               customType: event.type === "terminal" ? "subagent-result" : "subagent-report",
               content,
               display: true,
               details:
-                event.type === "terminal" && result
+                event.type === "terminal"
                   ? {
                       runId: event.runId,
                       usageVersion: 3,
                       mode: "single",
                       ...runMetadata,
-                      results: [result],
+                      results: slimResults,
+                      run: notificationRun,
                     }
-                  : { runId: event.runId, eventId: event.eventId },
+                  : {
+                      runId: event.runId,
+                      eventId: event.eventId,
+                      agent: event.agent,
+                    },
             },
             { triggerTurn: true, deliverAs: "steer" },
           );
@@ -1655,10 +1860,39 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({ runId: Type.Optional(Type.String()) }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
       const active = await getManager(ctx);
-      const data = params.runId
-        ? { run: (await active.manager.getRun({ ...active.owner, runId: params.runId })) ?? null }
-        : { runs: await active.manager.listRuns(active.owner) };
-      return { content: [{ type: "text", text: JSON.stringify(data) }], details: {} };
+      if (params.runId) {
+        const snapshot = await active.manager.getRun({ ...active.owner, runId: params.runId });
+        if (!snapshot) {
+          return {
+            content: [{ type: "text" as const, text: formatMissingRun(params.runId) }],
+            details: { run: null, runId: params.runId } satisfies AgentStatusDetails,
+          };
+        }
+        const run = toRunSummary(snapshot);
+        return {
+          content: [{ type: "text" as const, text: formatStatusCard(run) }],
+          details: { run } satisfies AgentStatusDetails,
+        };
+      }
+      const runs = (await active.manager.listRuns(active.owner)).map(toRunSummary);
+      return {
+        content: [{ type: "text" as const, text: formatStatusList(runs) }],
+        details: { runs } satisfies AgentStatusDetails,
+      };
+    },
+    renderCall(args, theme) {
+      const target = args.runId ? `run ${shortRunId(args.runId)}` : "all runs";
+      return new Text(
+        theme.fg("toolTitle", theme.bold("agent_status ")) + theme.fg("accent", target),
+        0,
+        0,
+      );
+    },
+    renderResult(result, _options, theme) {
+      const details = result.details as AgentStatusDetails | undefined;
+      const text = result.content[0];
+      const fallback = text?.type === "text" ? text.text : "(no output)";
+      return new Text(theme.fg("toolOutput", statusResultBody(details, fallback)), 0, 0);
     },
   });
   pi.registerTool({
@@ -1679,10 +1913,31 @@ export default function (pi: ExtensionAPI) {
         mode: params.mode,
       });
       return {
-        content: [{ type: "text", text: JSON.stringify(result) }],
-        details: {},
+        content: [
+          {
+            type: "text" as const,
+            text: formatSendReport({ runId: params.runId, mode: params.mode, result }),
+          },
+        ],
+        details: { runId: params.runId, mode: params.mode, result } satisfies AgentSendDetails,
         isError: result.kind === "rejected",
       };
+    },
+    renderCall(args, theme) {
+      const preview = args.message.length > 60 ? `${args.message.slice(0, 60)}...` : args.message;
+      return new Text(
+        theme.fg("toolTitle", theme.bold("agent_send ")) +
+          theme.fg("accent", args.mode) +
+          theme.fg("muted", ` → ${shortRunId(args.runId)}`) +
+          `\n  ${theme.fg("dim", preview)}`,
+        0,
+        0,
+      );
+    },
+    renderResult(result, _options, theme) {
+      const text = result.content[0];
+      const body = text?.type === "text" ? text.text : "(no output)";
+      return new Text(theme.fg(result.isError ? "error" : "toolOutput", body), 0, 0);
     },
   });
   pi.registerTool({
@@ -1694,10 +1949,23 @@ export default function (pi: ExtensionAPI) {
       const active = await getManager(ctx);
       const canceled = await active.manager.cancelRun({ ...active.owner, runId: params.runId });
       return {
-        content: [{ type: "text", text: JSON.stringify({ canceled }) }],
-        details: {},
+        content: [{ type: "text" as const, text: formatCancelReport(params.runId, canceled) }],
+        details: { runId: params.runId, canceled } satisfies AgentCancelDetails,
         isError: !canceled,
       };
+    },
+    renderCall(args, theme) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("agent_cancel ")) +
+          theme.fg("accent", shortRunId(args.runId)),
+        0,
+        0,
+      );
+    },
+    renderResult(result, _options, theme) {
+      const text = result.content[0];
+      const body = text?.type === "text" ? text.text : "(no output)";
+      return new Text(theme.fg(result.isError ? "error" : "toolOutput", body), 0, 0);
     },
   });
 
@@ -1705,6 +1973,18 @@ export default function (pi: ExtensionAPI) {
     description: "Inspect running and recently completed subagents",
     handler: async (_args, ctx) => openInspector(ctx),
   });
+
+  // Older hosts and test doubles may not render custom messages; the content stays readable.
+  if (pi.registerMessageRenderer) {
+    pi.registerMessageRenderer<SubagentResultDetails>(
+      "subagent-result",
+      (message, options, theme) => renderSubagentResultMessage(message, options, theme),
+    );
+    pi.registerMessageRenderer<SubagentReportDetails>(
+      "subagent-report",
+      (message, options, theme) => renderSubagentReportMessage(message, options, theme),
+    );
+  }
 
   pi.registerShortcut("ctrl+shift+a", {
     description: "Inspect running and recently completed subagents",
@@ -2174,7 +2454,15 @@ export default function (pi: ExtensionAPI) {
         });
         if (scheduled.kind === "rejected")
           return {
-            content: [{ type: "text", text: JSON.stringify(scheduled) }],
+            content: [
+              {
+                type: "text",
+                text:
+                  scheduled.reason === "queue-full"
+                    ? "The asynchronous queue is full. Wait for a run to finish or cancel one, then retry."
+                    : "No asynchronous runs were scheduled.",
+              },
+            ],
             details: makeDetails(requestedMode)([]),
             isError: true,
           };
@@ -2209,9 +2497,10 @@ export default function (pi: ExtensionAPI) {
           };
         }
         releaseJobs();
+        const runs = scheduled.runs.map(toRunSummary);
         return {
-          content: [{ type: "text", text: JSON.stringify({ runs: scheduled.runs }) }],
-          details: makeDetails(requestedMode)([]),
+          content: [{ type: "text", text: formatLaunchReport(runs) }],
+          details: { ...makeDetails(requestedMode)([]), runs } as AsyncLaunchDetails,
         };
       }
 
@@ -2580,6 +2869,23 @@ export default function (pi: ExtensionAPI) {
     },
 
     renderResult(result, { expanded, isPartial }, theme, _context) {
+      const launchRuns = (result.details as AsyncLaunchDetails | undefined)?.runs;
+      if (launchRuns && launchRuns.length > 0) {
+        let text =
+          theme.fg("toolTitle", theme.bold("agent ")) +
+          theme.fg(
+            "accent",
+            `async (${launchRuns.length} run${launchRuns.length === 1 ? "" : "s"})`,
+          );
+        for (const run of launchRuns) {
+          const preview =
+            run.task.length > 60 ? `${run.task.slice(0, 60)}...` : run.task.replace(/\s+/g, " ");
+          text += `\n  ${theme.fg("warning", "⏳")} ${theme.fg("accent", run.agent)} ${theme.fg("muted", shortRunId(run.id))}`;
+          text += `\n    ${theme.fg("dim", preview)}`;
+        }
+        text += `\n${theme.fg("muted", "Use agent_status to check progress.")}`;
+        return new Text(text, 0, 0);
+      }
       const details = result.details as SubagentDetails | undefined;
       if (!details || details.results.length === 0 || isPartial) {
         const text = result.content[0];
@@ -2660,15 +2966,17 @@ export default function (pi: ExtensionAPI) {
         let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
         if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
         if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
-        if (r.outputPath) text += `\n${theme.fg("muted", `Output: ${r.outputPath}`)}`;
-        else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
-        else {
-          text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
-          if (displayItems.length > COLLAPSED_ITEM_COUNT)
-            text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
-        }
+        if (r.outputPath) {
+          text += `\n${theme.fg("muted", `Artifact: ${shortPath(r.outputPath, { maxWidth: 80 })}`)}`;
+          if (r.preview) {
+            const preview = r.preview.split("\n").slice(0, 3).join("\n");
+            text += `\n${theme.fg("toolOutput", preview)}`;
+          }
+        } else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+        else text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
         const usageStr = formatResultUsageStats(r, r.model);
         if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
+        text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
         return new Text(text, 0, 0);
       }
 
@@ -2764,8 +3072,10 @@ export default function (pi: ExtensionAPI) {
           const rIcon = statusIcon(status);
           const displayItems = getResultDisplayItems(r);
           text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
-          if (r.outputPath) text += `\n${theme.fg("muted", `Output: ${r.outputPath}`)}`;
-          else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+          if (r.outputPath) {
+            text += `\n${theme.fg("muted", `Artifact: ${shortPath(r.outputPath, { maxWidth: 80 })}`)}`;
+            if (r.preview) text += `\n${theme.fg("toolOutput", r.preview.split("\n")[0])}`;
+          } else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
           else text += `\n${renderDisplayItems(displayItems, 5)}`;
         }
         const usageStr = formatUsageStats(aggregateUsage(details.results));
@@ -2852,8 +3162,10 @@ export default function (pi: ExtensionAPI) {
           const rIcon = statusIcon(status);
           const displayItems = getResultDisplayItems(r);
           text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
-          if (r.outputPath) text += `\n${theme.fg("muted", `Output: ${r.outputPath}`)}`;
-          else if (displayItems.length === 0)
+          if (r.outputPath) {
+            text += `\n${theme.fg("muted", `Artifact: ${shortPath(r.outputPath, { maxWidth: 80 })}`)}`;
+            if (r.preview) text += `\n${theme.fg("toolOutput", r.preview.split("\n")[0])}`;
+          } else if (displayItems.length === 0)
             text += `\n${theme.fg("muted", status === "running" ? "(running...)" : "(no output)")}`;
           else text += `\n${renderDisplayItems(displayItems, 5)}`;
         }
