@@ -4665,7 +4665,6 @@ describe("subagent message renderers", () => {
           runId,
           eventId: `${runId}:1`,
           agent: "scout",
-          content: "Discovery complete.",
         },
       },
       { expanded: false },

@@ -16,6 +16,7 @@ import {
   shortRunId,
   statusColor,
   toRunSummary,
+  reportBody,
 } from "./presentation.js";
 
 const COMPLETED_RUN_ID = "1063e371-3864-4f21-91d9-1e47886f4236";
@@ -189,6 +190,18 @@ describe("toRunSummary", () => {
   });
 });
 
+describe("reportBody", () => {
+  it("removes the notification header from a report", () => {
+    expect(reportBody(`Subagent scout report (run ${COMPLETED_RUN_ID}):\nBody text`)).toBe(
+      "Body text",
+    );
+  });
+
+  it("leaves text without a notification header unchanged", () => {
+    expect(reportBody("Body text")).toBe("Body text");
+  });
+});
+
 describe("formatStatusList", () => {
   it("lists the full run ID, state, task, and artifact path", () => {
     const text = formatStatusList([toRunSummary(completedRun()), toRunSummary(runningRun())]);
@@ -270,6 +283,42 @@ describe("formatStatusCard", () => {
     expect(text.length).toBeLessThanOrEqual(MAX_STATUS_CHARS);
     expect(text).toContain("output truncated");
     expect(text).toContain(ARTIFACT_PATH);
+  });
+
+  it("flags a partially truncated report in the card", () => {
+    const run = toRunSummary(
+      completedRun({
+        reports: ["Short report.", "x".repeat(3_000)],
+      }),
+    );
+    expect(run.reportsTruncated).toBe(true);
+    const text = formatStatusCard(run);
+    expect(text).toContain("report text truncated");
+    expect(text).toContain("The full text is in the report notification.");
+  });
+
+  it("does not flag reports that fit", () => {
+    const run = toRunSummary(completedRun());
+    expect(run.reportsTruncated).toBe(false);
+    const text = formatStatusCard(run);
+    expect(text).not.toContain("report text truncated");
+  });
+
+  it("flags truncated message content", () => {
+    const run = toRunSummary(
+      runningRun({
+        messages: [
+          {
+            id: "message-1",
+            mode: "steer",
+            outcome: "accepted-by-child",
+            content: "y".repeat(400),
+          },
+        ],
+      }),
+    );
+    expect(run.messagesTruncated).toBe(true);
+    expect(formatStatusCard(run)).toContain("message text truncated");
   });
 
   it("describes a running run without an artifact", () => {

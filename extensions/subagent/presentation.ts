@@ -81,8 +81,10 @@ export interface RunSummary {
   status: RunStatus;
   reports: string[];
   reportCount: number;
+  reportsTruncated: boolean;
   messages: RunSummaryMessage[];
   messageCount: number;
+  messagesTruncated: boolean;
   artifactPath?: string;
   error?: string;
   usage?: UsageTotalsWithTurns & { contextTokens?: number };
@@ -194,42 +196,66 @@ function artifactPath(snapshot: RunSnapshot): string | undefined {
 }
 
 function capText(value: string, maxChars: number): string {
-  const clean = sanitizeText(value).trim().replace(/\s+/g, " ");
-  return clean.length <= maxChars ? clean : `${clean.slice(0, maxChars - 1)}…`;
+  return capTextResult(value, maxChars).text;
 }
 
-function capReports(reports: string[]): string[] {
+function capTextResult(value: string, maxChars: number): { text: string; truncated: boolean } {
+  const clean = sanitizeText(value).trim().replace(/\s+/g, " ");
+  if (clean.length <= maxChars) return { text: clean, truncated: false };
+  return { text: `${clean.slice(0, maxChars - 1)}…`, truncated: true };
+}
+
+function capReports(reports: string[]): { reports: string[]; truncated: boolean } {
   const kept: string[] = [];
   let remaining = REPORT_TEXT_BUDGET;
+  let truncated = false;
   for (const report of reports) {
-    if (remaining <= 0) break;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
     const clean = sanitizeText(report).trim();
     if (!clean) continue;
-    const text =
-      clean.length <= remaining ? clean : `${clean.slice(0, Math.max(0, remaining - 1))}…`;
-    kept.push(text);
-    remaining -= text.length;
+    if (clean.length <= remaining) {
+      kept.push(clean);
+      remaining -= clean.length;
+      continue;
+    }
+    kept.push(`${clean.slice(0, Math.max(0, remaining - 1))}…`);
+    remaining = 0;
+    truncated = true;
   }
-  return kept;
+  return { reports: kept, truncated };
+}
+
+function capMessages(messages: RunSnapshot["messages"]): {
+  messages: RunSummaryMessage[];
+  truncated: boolean;
+} {
+  let truncated = messages.length > MAX_MESSAGES;
+  const kept = messages.slice(0, MAX_MESSAGES).map((message) => {
+    const content = capTextResult(message.content, MAX_MESSAGE_CHARS);
+    if (content.truncated) truncated = true;
+    return { id: message.id, mode: message.mode, outcome: message.outcome, content: content.text };
+  });
+  return { messages: kept, truncated };
 }
 
 export function toRunSummary(snapshot: RunSnapshot): RunSummary {
   const facts = readResultFacts(snapshot);
-  const messages = snapshot.messages.slice(0, MAX_MESSAGES).map((message) => ({
-    id: message.id,
-    mode: message.mode,
-    outcome: message.outcome,
-    content: capText(message.content, MAX_MESSAGE_CHARS),
-  }));
+  const reports = capReports(snapshot.reports);
+  const messages = capMessages(snapshot.messages);
   const summary: RunSummary = {
     id: snapshot.id,
     agent: sanitizeText(snapshot.agent),
     task: sanitizeText(snapshot.task),
     status: runStatus(snapshot),
-    reports: capReports(snapshot.reports),
+    reports: reports.reports,
     reportCount: snapshot.reports.length,
-    messages,
+    reportsTruncated: reports.truncated,
+    messages: messages.messages,
     messageCount: snapshot.messages.length,
+    messagesTruncated: messages.truncated,
     artifactPath: artifactPath(snapshot),
     error: "error" in snapshot.state ? sanitizeText(snapshot.state.error) : undefined,
     usage: facts.usage,
@@ -312,6 +338,24 @@ function truncateStatus(lines: string[], runCount: number): string {
   return kept.join("\n");
 }
 
+export function reportTruncationNotice(run: RunSummary): string | undefined {
+  const omitted = run.reportCount - run.reports.length;
+  if (omitted === 0 && !run.reportsTruncated) return undefined;
+  const parts: string[] = [];
+  if (omitted > 0) parts.push(`${omitted} more report${omitted === 1 ? "" : "s"}`);
+  if (run.reportsTruncated) parts.push("report text truncated");
+  return `... ${parts.join("; ")}. The full text is in the report notification.`;
+}
+
+export function messageTruncationNotice(run: RunSummary): string | undefined {
+  const omitted = run.messageCount - run.messages.length;
+  if (omitted === 0 && !run.messagesTruncated) return undefined;
+  const parts: string[] = [];
+  if (omitted > 0) parts.push(`${omitted} more message${omitted === 1 ? "" : "s"}`);
+  if (run.messagesTruncated) parts.push("message text truncated");
+  return `... ${parts.join("; ")}.`;
+}
+
 export function formatStatusCard(run: RunSummary, options: StatusFormatOptions = {}): string {
   const lines = [
     `agent_status: ${displayRunId(run, options)}`,
@@ -341,17 +385,16 @@ export function formatStatusCard(run: RunSummary, options: StatusFormatOptions =
       lines.push(`  ${index + 1}. ${first}`);
       for (const line of rest) lines.push(`     ${line}`);
     });
-    const omitted = run.reportCount - run.reports.length;
-    if (omitted > 0)
-      lines.push(`  ... ${omitted} more report${omitted === 1 ? "" : "s"} (truncated)`);
+    const notice = reportTruncationNotice(run);
+    if (notice) lines.push(`  ${notice}`);
   }
   if (run.messageCount > 0) {
     lines.push(`Messages (${run.messageCount}):`);
     for (const message of run.messages) {
       lines.push(`  - ${message.id} ${message.mode} ${message.outcome}: "${message.content}"`);
     }
-    const omitted = run.messageCount - run.messages.length;
-    if (omitted > 0) lines.push(`  ... ${omitted} more message${omitted === 1 ? "" : "s"}`);
+    const notice = messageTruncationNotice(run);
+    if (notice) lines.push(`  ${notice}`);
   }
   if (run.preview) lines.push(`Preview: ${run.preview}`);
   return capCard(lines);
@@ -451,4 +494,19 @@ export function formatReportNotification(options: {
   content: string;
 }): string {
   return `Subagent ${options.agent} report (run ${options.runId}):\n${sanitizeText(options.content)}`;
+}
+
+/** Recover the report body from the model-facing notification text. */
+export function reportBody(content: string): string {
+  const newline = content.indexOf("\n");
+  if (newline === -1) return content;
+  const header = content.slice(0, newline);
+  if (
+    !header.startsWith("Subagent ") ||
+    !header.includes(" report (run ") ||
+    !header.endsWith("):")
+  ) {
+    return content;
+  }
+  return content.slice(newline + 1);
 }

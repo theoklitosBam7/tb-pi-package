@@ -99,6 +99,9 @@ import {
   formatStatusList,
   formatTerminalReport,
   formatUsage as formatUsageStats,
+  messageTruncationNotice,
+  reportBody,
+  reportTruncationNotice,
   sanitizeText,
   shortPath,
   shortRunId,
@@ -415,7 +418,6 @@ interface SubagentReportDetails {
   runId: string;
   eventId: string;
   agent?: string;
-  content?: string;
 }
 
 class LeftGutter implements Component {
@@ -504,10 +506,8 @@ function renderSubagentResultMessage(
       for (const report of run.reports) {
         content.addChild(new Text(theme.fg("dim", report), 0, 0));
       }
-      const omitted = run.reportCount - run.reports.length;
-      if (omitted > 0) {
-        content.addChild(new Text(theme.fg("muted", `... ${omitted} more reports`), 0, 0));
-      }
+      const notice = reportTruncationNotice(run);
+      if (notice) content.addChild(new Text(theme.fg("muted", notice), 0, 0));
     }
     if (run && run.messageCount > 0) {
       content.addChild(new Spacer(1));
@@ -521,10 +521,8 @@ function renderSubagentResultMessage(
           ),
         );
       }
-      const omitted = run.messageCount - run.messages.length;
-      if (omitted > 0) {
-        content.addChild(new Text(theme.fg("muted", `... ${omitted} more messages`), 0, 0));
-      }
+      const notice = messageTruncationNotice(run);
+      if (notice) content.addChild(new Text(theme.fg("muted", notice), 0, 0));
     }
     if (result?.errorMessage) {
       content.addChild(
@@ -559,9 +557,7 @@ function renderSubagentReportMessage(
     content.addChild(new Spacer(1));
     content.addChild(
       new Markdown(
-        sanitizeText(
-          details?.content ?? (typeof message.content === "string" ? message.content : ""),
-        ),
+        sanitizeText(reportBody(typeof message.content === "string" ? message.content : "")),
         0,
         0,
         getMarkdownTheme(),
@@ -1789,7 +1785,6 @@ export default function (pi: ExtensionAPI) {
                       runId: event.runId,
                       eventId: event.eventId,
                       agent: event.agent,
-                      content: event.content,
                     },
             },
             { triggerTurn: true, deliverAs: "steer" },
