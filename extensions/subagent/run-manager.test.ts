@@ -202,6 +202,22 @@ describe("RunManager", () => {
     );
   });
 
+  it("stops waiting for cleanup on reset when the cleanup timeout expires", async () => {
+    const manager = createRunManager({ ...owner, cleanupTimeoutMs: 10 });
+    const cleanup = deferred<{ artifactPath: string }>();
+    const result = await manager.scheduleBatch({
+      ...owner,
+      jobs: [job("active", () => cleanup.promise)],
+    });
+    if (result.kind !== "scheduled") throw new Error("Expected scheduled run");
+
+    const startedAt = Date.now();
+    await manager.reset({ sessionId: "session-b", generation: 2 });
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    cleanup.resolve({ artifactPath: "/final.md" });
+  });
+
   it("rejects message and cancel requests for a run owned by the prior generation", async () => {
     const manager = createRunManager(owner);
     const cleanup = deferred<{ artifactPath: string }>();

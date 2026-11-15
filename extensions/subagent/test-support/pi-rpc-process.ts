@@ -4,33 +4,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isJsonRecord, type JsonRecord } from "./json-record.js";
+import { selectPiSdk } from "./pi-sdk.js";
 
-export type JsonRecord = Record<string, unknown>;
-
-export function isJsonRecord(value: unknown): value is JsonRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+export { isJsonRecord, type JsonRecord } from "./json-record.js";
 
 export const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../..",
 );
 
-const piPackagePath = path.join(
-  repositoryRoot,
-  "node_modules",
-  "@earendil-works",
-  "pi-coding-agent",
-);
-const piPackageManifestValue: unknown = JSON.parse(
-  fs.readFileSync(path.join(piPackagePath, "package.json"), "utf8"),
-);
-
-if (!isJsonRecord(piPackageManifestValue) || piPackageManifestValue.version !== "1.5.0") {
-  throw new Error("The RPC integration tests require the repo-pinned Pi 1.5.0 package.");
-}
-
-export const pinnedPiCliPath = path.join(piPackagePath, "dist", "cli.js");
+export const piCliPath = selectPiSdk().cliPath;
 
 export function createTemporaryProject(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -89,7 +73,7 @@ export function startPiRpc(options: StartPiRpcOptions) {
   const child = spawn(
     process.execPath,
     [
-      pinnedPiCliPath,
+      piCliPath,
       "--mode",
       "rpc",
       "--no-session",

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { createReportServer } from "./report.js";
 import { buildArtifactPath } from "./result.js";
+import { findPiDependency, selectPiSdk } from "./test-support/pi-sdk.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -986,7 +987,7 @@ describe("asynchronous subagent process integration", () => {
       const repositoryRoot = path.resolve(path.dirname(testFilePath), "../..");
       const reportExtensionPath = path.join(repositoryRoot, "extensions/subagent/report.ts");
       const aiModulePath = pathToFileURL(
-        path.resolve(repositoryRoot, "node_modules/@earendil-works/pi-ai/dist/index.js"),
+        path.join(findPiDependency(selectPiSdk(), "@earendil-works/pi-ai"), "dist", "index.js"),
       ).href;
       fs.writeFileSync(
         providerPath,
