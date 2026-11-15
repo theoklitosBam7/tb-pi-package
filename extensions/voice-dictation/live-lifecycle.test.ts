@@ -81,7 +81,7 @@ function recordingUI(key: string, consumed: unknown[]) {
 
 const choice = { alias: "nemotron-speech-streaming-en-0.6b", id: "test-model" };
 
-describe("live dictation lifecycle", () => {
+describe("[process integration] live dictation lifecycle", () => {
   it.skipIf(process.platform !== "darwin")(
     "publishes partial text and refreshes the visible editor before Enter",
     async () => {

@@ -3243,14 +3243,7 @@ setTimeout(() => process.exit(0), 12000);`,
 });
 
 describe("subagent process launch", () => {
-  it.each([
-    "SDK host",
-    "Pi CLI",
-    "symlinked Pi CLI",
-    "bundled Pi CLI",
-    "symlinked bundled Pi CLI",
-    "compiled Pi binary",
-  ])("launches Pi from a %s parent without rerunning an SDK host", async (parentKind) => {
+  async function verifyLaunch(parentKind: string) {
     const project = createPersistenceTestProject(
       "sdk-launch-",
       "---\nname: worker\ndescription: Test worker\n---\n",
@@ -3356,7 +3349,21 @@ describe("subagent process launch", () => {
       vi.unstubAllEnvs();
       fs.rmSync(project, { recursive: true, force: true });
     }
+  }
+
+  it.each([
+    "Pi CLI",
+    "symlinked Pi CLI",
+    "bundled Pi CLI",
+    "symlinked bundled Pi CLI",
+    "compiled Pi binary",
+  ])("launches Pi from a %s parent without rerunning an SDK host", async (parentKind) => {
+    await verifyLaunch(parentKind);
   });
+
+  it("[process integration] launches Pi from an SDK host without rerunning an SDK host", async () => {
+    await verifyLaunch("SDK host");
+  }, 20_000);
 });
 
 describe("subagent tool guidance", () => {

@@ -93,7 +93,7 @@ afterEach(() => {
   }
 });
 
-describe("real child RPC failure integration", () => {
+describe("[process integration] real child RPC failure integration", () => {
   it("fails a pending prompt on a malformed RPC record without hanging", async () => {
     const { child, ready } = launchChild(
       [
