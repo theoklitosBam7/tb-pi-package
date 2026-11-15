@@ -22,46 +22,49 @@ describe("Foundry live transcription", () => {
     }
     expect(await transcribePcm(session, pcm(), (text) => updates.push(text))).toBe("Hello world.");
   });
-  it.skipIf(
-    process.platform !== "darwin" ||
-      spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status !== 0,
-  )("keeps the transcript after Enter stops FFmpeg with exit code 255", async () => {
-    const recorder = spawn(
-      "ffmpeg",
-      [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostdin",
-        "-re",
-        "-f",
-        "lavfi",
-        "-i",
-        "anullsrc=r=16000:cl=mono",
-        "-f",
-        "s16le",
-        "pipe:1",
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    const session = {
-      start: vi.fn().mockResolvedValue(undefined),
-      append: vi.fn().mockResolvedValue(undefined),
-      stop: vi.fn().mockResolvedValue(undefined),
-      async *getStream() {
-        yield { content: [{ text: "Hello" }], is_final: true };
-      },
-    };
-    const ui = {
-      onTerminalInput: (listener: (data: string) => unknown) => {
-        const timer = setTimeout(() => listener("\r"), 350);
-        return () => clearTimeout(timer);
-      },
-    };
-    expect(await recordLiveSession(session, recorder, ui)).toBe("Hello");
-    expect(session.append).toHaveBeenCalled();
-    expect(recorder.exitCode).toBe(255);
-  });
+  it.skipIf(process.platform !== "darwin")(
+    "[process integration] keeps the transcript after Enter stops FFmpeg with exit code 255",
+    async (context) => {
+      if (spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status !== 0) {
+        context.skip("ffmpeg is not installed");
+      }
+      const recorder = spawn(
+        "ffmpeg",
+        [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-nostdin",
+          "-re",
+          "-f",
+          "lavfi",
+          "-i",
+          "anullsrc=r=16000:cl=mono",
+          "-f",
+          "s16le",
+          "pipe:1",
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      const session = {
+        start: vi.fn().mockResolvedValue(undefined),
+        append: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        async *getStream() {
+          yield { content: [{ text: "Hello" }], is_final: true };
+        },
+      };
+      const ui = {
+        onTerminalInput: (listener: (data: string) => unknown) => {
+          const timer = setTimeout(() => listener("\r"), 350);
+          return () => clearTimeout(timer);
+        },
+      };
+      expect(await recordLiveSession(session, recorder, ui)).toBe("Hello");
+      expect(session.append).toHaveBeenCalled();
+      expect(recorder.exitCode).toBe(255);
+    },
+  );
 
   it("streams 16-bit PCM and returns final transcript segments, not partial repeats", async () => {
     const pcm = [new Uint8Array([1, 0, 2, 0]), new Uint8Array([3, 0, 4, 0])];

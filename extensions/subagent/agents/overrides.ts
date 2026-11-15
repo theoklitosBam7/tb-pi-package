@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { isRecord } from "../is-record.js";
 import {
   parseSubagentThinkingLevel,
   type AgentConfig,
@@ -23,10 +24,6 @@ export type AgentOverrideEntry =
 export interface AgentOverridesSnapshot {
   settingsPath: string;
   entries: ReadonlyMap<string, AgentOverrideEntry>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNonEmptyToolList(value: unknown): value is NonEmptyToolList {

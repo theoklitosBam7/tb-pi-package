@@ -94,7 +94,7 @@ describe("asynchronous subagent process integration", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("returns a run ID while a real RPC child remains active", async () => {
+  it("[process integration] returns a run ID while a real RPC child remains active", async () => {
     const project = createProject();
     vi.stubEnv("PI_CODING_AGENT_DIR", project);
     const readyPath = path.join(project, "child-ready");

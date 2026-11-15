@@ -122,7 +122,7 @@ pnpm test:integration
 ```
 
 `pnpm test` runs the unit test suite.
-`pnpm test:integration` runs the marked HTTPS transport test and the subagent tests that start real child processes. The process tests use the `[process integration]` marker and require a non-Windows system.
+`pnpm test:integration` runs the marked HTTPS transport test, the Pi SDK event bus contract tests, and tests that start real child processes. Tests that start real child processes use the `[process integration]` marker. Tests that need POSIX process behavior also skip on Windows.
 
 ## Contributing
 

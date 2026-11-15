@@ -37,6 +37,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { createInspectionPublisher } from "./inspection/inspection-publisher.js";
+import { isRecord } from "./is-record.js";
 import { Type } from "typebox";
 import {
   addUsageTotals,
@@ -192,10 +193,6 @@ type WatchdogConfig = {
   toolSeconds: number | null;
   taskSeconds: number | null;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 function stringEnumSchema<const Values extends Record<string, string>>(
   values: Values,
