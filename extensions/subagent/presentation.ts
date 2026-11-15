@@ -8,6 +8,7 @@ import type { SubagentTermination } from "./result.js";
 export const MAX_STATUS_CHARS = 4_000;
 const MAX_LIST_TASK_CHARS = 200;
 const MAX_CARD_TASK_CHARS = 400;
+const MAX_LIST_PREVIEW_CHARS = 160;
 const REPORT_TEXT_BUDGET = 2_000;
 const MAX_MESSAGE_CHARS = 200;
 const MAX_MESSAGES = 8;
@@ -116,26 +117,24 @@ export function shortPath(
   return `${displayed.slice(0, head)}...${displayed.slice(displayed.length - tail)}`;
 }
 
+export type RunStatusColor = "success" | "warning" | "error";
+
+const STATUS_PRESENTATION: Record<RunStatus, { symbol: string; color: RunStatusColor }> = {
+  queued: { symbol: "·", color: "warning" },
+  running: { symbol: "⏳", color: "warning" },
+  stopping: { symbol: "■", color: "warning" },
+  completed: { symbol: "✓", color: "success" },
+  failed: { symbol: "✗", color: "error" },
+  aborted: { symbol: "■", color: "error" },
+  "timed out": { symbol: "✗", color: "error" },
+};
+
 export function statusSymbol(status: RunStatus): string {
-  switch (status) {
-    case "queued":
-      return "·";
-    case "running":
-      return "⏳";
-    case "stopping":
-      return "■";
-    case "completed":
-      return "✓";
-    case "failed":
-    case "timed out":
-      return "✗";
-    case "aborted":
-      return "■";
-    default: {
-      const _exhaustive: never = status;
-      return _exhaustive;
-    }
-  }
+  return STATUS_PRESENTATION[status].symbol;
+}
+
+export function statusColor(status: RunStatus): RunStatusColor {
+  return STATUS_PRESENTATION[status].color;
 }
 
 export function formatRunState(status: RunStatus): string {
@@ -246,8 +245,10 @@ function describeRuns(runs: RunSummary[]): string {
     (run) => run.status === "queued" || run.status === "running" || run.status === "stopping",
   ).length;
   const completed = runs.filter((run) => run.status === "completed").length;
-  const parts = [`${active} active`, `${completed} completed`];
-  return `${runs.length} run${runs.length === 1 ? "" : "s"} (${parts.join(", ")})`;
+  const failed = runs.filter(
+    (run) => run.status === "failed" || run.status === "timed out" || run.status === "aborted",
+  ).length;
+  return `${runs.length} run${runs.length === 1 ? "" : "s"} (${formatRunCounts({ active, completed, failed })})`;
 }
 
 export interface StatusFormatOptions {
@@ -263,22 +264,27 @@ function displayPath(value: string, options: StatusFormatOptions): string {
   return options.compact ? shortPath(value, { maxWidth: 80 }) : value;
 }
 
+function artifactLine(run: RunSummary, options: StatusFormatOptions): string {
+  if (run.artifactPath) return `Artifact: ${displayPath(run.artifactPath, options)}`;
+  if (run.status === "queued" || run.status === "running" || run.status === "stopping") {
+    return "Artifact: none yet";
+  }
+  return "Artifact: none";
+}
+
 export function formatStatusList(runs: RunSummary[], options: StatusFormatOptions = {}): string {
   if (runs.length === 0) return "No asynchronous runs in this session.";
   const lines = [`agent_status: ${describeRuns(runs)}`];
   for (const run of runs) {
+    const reports =
+      run.reportCount > 0 ? ` · ${run.reportCount} report${run.reportCount === 1 ? "" : "s"}` : "";
+    const usage = run.usage ? ` · ${formatUsage(run.usage)}` : "";
     lines.push(
-      `- ${displayRunId(run, options)} ${formatRunState(run.status)} ${run.agent}${run.reportCount > 0 ? ` · ${run.reportCount} report${run.reportCount === 1 ? "" : "s"}` : ""}`,
+      `- ${displayRunId(run, options)} ${formatRunState(run.status)} ${run.agent}${reports}${usage}`,
     );
     lines.push(`  Task: ${capText(run.task, MAX_LIST_TASK_CHARS)}`);
-    const path = run.artifactPath ? displayPath(run.artifactPath, options) : undefined;
-    lines.push(
-      path
-        ? `  Artifact: ${path}`
-        : run.status === "completed" || run.status === "failed" || run.status === "timed out"
-          ? "  Artifact: none"
-          : "  Artifact: none yet",
-    );
+    lines.push(`  ${artifactLine(run, options)}`);
+    if (run.preview) lines.push(`  Preview: ${capText(run.preview, MAX_LIST_PREVIEW_CHARS)}`);
   }
   return truncateStatus(lines, runs.length);
 }
@@ -286,11 +292,13 @@ export function formatStatusList(runs: RunSummary[], options: StatusFormatOption
 function truncateStatus(lines: string[], runCount: number): string {
   const text = lines.join("\n");
   if (text.length <= MAX_STATUS_CHARS) return text;
+  const noticeReserve = 120;
+  const budget = MAX_STATUS_CHARS - noticeReserve;
   const kept: string[] = [];
   let length = 0;
   let keptRuns = 0;
   for (const line of lines) {
-    if (length + line.length + 1 > MAX_STATUS_CHARS) break;
+    if (length + line.length + 1 > budget) break;
     kept.push(line);
     length += line.length + 1;
     if (line.startsWith("- ")) keptRuns += 1;
@@ -301,18 +309,16 @@ function truncateStatus(lines: string[], runCount: number): string {
       `... ${omitted} more run${omitted === 1 ? "" : "s"} omitted; pass a runId to inspect one.`,
     );
   }
-  while (kept.join("\n").length > MAX_STATUS_CHARS && kept.length > 1) kept.pop();
   return kept.join("\n");
 }
 
 export function formatStatusCard(run: RunSummary, options: StatusFormatOptions = {}): string {
-  const artifact = run.artifactPath ? displayPath(run.artifactPath, options) : undefined;
   const lines = [
     `agent_status: ${displayRunId(run, options)}`,
     `Agent: ${run.agent}`,
     `State: ${formatRunState(run.status)}`,
     `Task: ${capText(run.task, MAX_CARD_TASK_CHARS)}`,
-    `Artifact: ${artifact ?? (run.status === "queued" || run.status === "running" ? "none yet" : "none")}`,
+    artifactLine(run, options),
   ];
   if (run.error) lines.push(`Error: ${run.error}`);
   const usage = run.usage ? formatUsage(run.usage) : "";
@@ -348,11 +354,31 @@ export function formatStatusCard(run: RunSummary, options: StatusFormatOptions =
     if (omitted > 0) lines.push(`  ... ${omitted} more message${omitted === 1 ? "" : "s"}`);
   }
   if (run.preview) lines.push(`Preview: ${run.preview}`);
-  return lines.join("\n");
+  return capCard(lines);
+}
+
+function capCard(lines: string[]): string {
+  const text = lines.join("\n");
+  if (text.length <= MAX_STATUS_CHARS) return text;
+  const notice = "... output truncated; pass a runId to inspect one run.";
+  const budget = MAX_STATUS_CHARS - notice.length - 1;
+  const kept: string[] = [];
+  let length = 0;
+  for (const line of lines) {
+    if (length + line.length + 1 > budget) break;
+    kept.push(line);
+    length += line.length + 1;
+  }
+  kept.push(notice);
+  return kept.join("\n");
 }
 
 export function formatMissingRun(runId: string): string {
   return `No run found for ID ${runId}. It may have been pruned or belong to another session.`;
+}
+
+export function formatMissingRunCard(runId: string): string {
+  return `agent_status: ${runId}\nState: ✗ not found`;
 }
 
 export function formatLaunchReport(runs: RunSummary[]): string {
@@ -406,12 +432,15 @@ export function formatTerminalReport(options: {
   otherRuns: { active: number; completed: number; failed: number };
 }): string {
   const { run, otherRuns } = options;
-  const lines = [`Subagent ${run.agent} ${run.status} (run ${run.id}).`];
-  if (run.artifactPath) lines.push(`Artifact: ${run.artifactPath}`);
+  const lines = [
+    `${statusSymbol(run.status)} subagent ${run.agent} ${run.status}`,
+    `  Run       ${run.id}`,
+  ];
+  if (run.artifactPath) lines.push(`  Artifact  ${run.artifactPath}`);
   const usage = run.usage ? formatUsage(run.usage) : "";
-  if (usage) lines.push(`Usage: ${usage}`);
+  if (usage) lines.push(`  Usage     ${usage}`);
   if (otherRuns.active + otherRuns.completed + otherRuns.failed > 0) {
-    lines.push(`Other runs: ${formatRunCounts(otherRuns)}`);
+    lines.push(`  Other runs: ${formatRunCounts(otherRuns)}`);
   }
   return lines.join("\n");
 }

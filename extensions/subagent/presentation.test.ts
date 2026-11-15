@@ -3,6 +3,7 @@ import type { RunSnapshot } from "./run-manager.js";
 import {
   formatCancelReport,
   formatLaunchReport,
+  formatMissingRunCard,
   formatRunState,
   formatSendReport,
   formatStatusCard,
@@ -13,6 +14,7 @@ import {
   sanitizeText,
   shortPath,
   shortRunId,
+  statusColor,
   toRunSummary,
 } from "./presentation.js";
 
@@ -133,6 +135,14 @@ describe("formatRunState", () => {
   });
 });
 
+describe("statusColor", () => {
+  it("shares one status presentation with the symbol", () => {
+    expect(statusColor("completed")).toBe("success");
+    expect(statusColor("running")).toBe("warning");
+    expect(statusColor("timed out")).toBe("error");
+  });
+});
+
 describe("formatUsage", () => {
   it("renders turns, tokens, cache reads, and cost compactly", () => {
     expect(formatUsage(usage)).toBe("13 turns ↑52k ↓6.1k R326k $0.0115");
@@ -189,6 +199,8 @@ describe("formatStatusList", () => {
     expect(text).toContain("Implement documentation phase 7 only.");
     expect(text).toContain(ARTIFACT_PATH);
     expect(text).toContain("2 reports");
+    expect(text).toContain("13 turns");
+    expect(text).toContain("Documentation phase 7 is complete.");
   });
 
   it("does not leak the transport payload", () => {
@@ -216,6 +228,17 @@ describe("formatStatusList", () => {
   it("states clearly when there are no runs", () => {
     expect(formatStatusList([])).toBe("No asynchronous runs in this session.");
   });
+
+  it("counts failed runs in the list summary", () => {
+    const failed = toRunSummary({
+      ...runningRun(),
+      id: "9f1c2d3e-0f64-4e57-8ff1-7b0c9a2e5d11",
+      state: { kind: "failed", error: "Child exited" },
+    });
+    expect(formatStatusList([toRunSummary(completedRun()), failed])).toContain(
+      "2 runs (0 active, 1 completed, 1 failed)",
+    );
+  });
 });
 
 describe("formatStatusCard", () => {
@@ -228,6 +251,25 @@ describe("formatStatusCard", () => {
     expect(text).toContain("Reports (1):");
     expect(text).toContain("Discovery complete");
     expect(text).toContain("message-1 steer accepted-by-child");
+  });
+
+  it("caps a single-run card and keeps the truncation notice", () => {
+    const run = toRunSummary(
+      completedRun({
+        task: "Review ".repeat(100),
+        reports: Array.from({ length: 20 }, () => "Report text ".repeat(100)),
+        messages: Array.from({ length: 8 }, (_, index) => ({
+          id: `message-${index + 1}`,
+          mode: "steer" as const,
+          outcome: "accepted-by-child" as const,
+          content: "Message text ".repeat(50),
+        })),
+      }),
+    );
+    const text = formatStatusCard(run);
+    expect(text.length).toBeLessThanOrEqual(MAX_STATUS_CHARS);
+    expect(text).toContain("output truncated");
+    expect(text).toContain(ARTIFACT_PATH);
   });
 
   it("describes a running run without an artifact", () => {
@@ -292,8 +334,8 @@ describe("formatTerminalReport", () => {
       otherRuns: { active: 3, completed: 11, failed: 0 },
     });
     expect(text.match(new RegExp(COMPLETED_RUN_ID, "g"))?.length).toBe(1);
-    expect(text).toContain("Subagent generalist completed");
-    expect(text).toContain("Artifact: " + ARTIFACT_PATH);
+    expect(text).toContain("✓ subagent generalist completed");
+    expect(text).toContain("Artifact  " + ARTIFACT_PATH);
     expect(text).toContain("13 turns");
     expect(text).toContain("Other runs: 3 active, 11 completed");
   });
@@ -304,6 +346,15 @@ describe("formatTerminalReport", () => {
       otherRuns: { active: 0, completed: 0, failed: 0 },
     });
     expect(text).not.toContain("Other runs:");
+  });
+});
+
+describe("formatMissingRunCard", () => {
+  it("renders a missing run as a status card", () => {
+    expect(formatMissingRunCard("run-missing")).toBe(
+      "agent_status: run-missing\nState: ✗ not found",
+    );
+    expect(formatMissingRunCard(COMPLETED_RUN_ID)).toContain(`agent_status: ${COMPLETED_RUN_ID}`);
   });
 });
 

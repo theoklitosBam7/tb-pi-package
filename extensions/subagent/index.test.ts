@@ -4415,7 +4415,19 @@ describe("asynchronous tool presentation", () => {
     );
 
     expect(result.content[0].text).toContain("No run found for ID run-missing");
-    expect(result.details).toEqual({ run: null });
+    expect(result.details).toEqual({ run: null, runId: "run-missing" });
+
+    const rendered = tools.agent_status
+      .renderResult(
+        result,
+        { expanded: false },
+        { bold: (text: string) => text, fg: (_color: string, text: string) => text },
+        {},
+      )
+      .render(80)
+      .join("\n");
+    expect(rendered).toContain("State: ✗ not found");
+    expect(rendered).toContain("run-missing");
   });
 
   it("explains a rejected message without JSON", async () => {
@@ -4574,8 +4586,15 @@ describe("subagent message renderers", () => {
             status: "completed",
             reports: [],
             reportCount: 0,
-            messages: [],
-            messageCount: 0,
+            messages: [
+              {
+                id: "message-1",
+                mode: "steer",
+                outcome: "accepted-by-child",
+                content: "Include the token refresh path",
+              },
+            ],
+            messageCount: 1,
             artifactPath,
             usage: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0, cost: 0.01, turns: 4 },
             preview: "Documentation phase 7 is complete.",
@@ -4613,8 +4632,15 @@ describe("subagent message renderers", () => {
             status: "completed",
             reports: [],
             reportCount: 0,
-            messages: [],
-            messageCount: 0,
+            messages: [
+              {
+                id: "message-1",
+                mode: "steer",
+                outcome: "accepted-by-child",
+                content: "Include the token refresh path",
+              },
+            ],
+            messageCount: 1,
             artifactPath,
           },
         },
@@ -4626,6 +4652,8 @@ describe("subagent message renderers", () => {
       .join("\n");
 
     expect(rendered).toContain(`Full artifact  ${artifactPath}`);
+    expect(rendered).toContain("message-1 steer accepted-by-child");
+    expect(rendered).toContain("Include the token refresh path");
   });
 
   it("renders a report notification with the report text and a short run ID", () => {
@@ -4650,5 +4678,60 @@ describe("subagent message renderers", () => {
     expect(rendered).toContain("1063e371");
     expect(rendered).toContain("Discovery complete.");
     expect(rendered).not.toContain(`${runId}:1`);
+  });
+});
+
+describe("collapsed synchronous card", () => {
+  it("always shows the expand hint", () => {
+    const tools: Record<string, any> = {};
+    subagentExtension({
+      events: createEventBus(),
+      on() {},
+      registerTool(tool: any) {
+        tools[tool.name] = tool;
+      },
+      registerCommand() {},
+      registerShortcut() {},
+    } as any);
+    const rendered = tools.agent
+      .renderResult(
+        {
+          content: [{ type: "text", text: "Agent completed." }],
+          details: {
+            mode: "single",
+            agentScope: "user",
+            projectAgentsDir: null,
+            results: [
+              {
+                agent: "worker",
+                agentSource: "user",
+                task: "Review",
+                exitCode: 0,
+                messages: [],
+                stderr: "",
+                thinkingKind: "default",
+                usage: {
+                  input: 0,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: 0,
+                  contextTokens: 0,
+                  turns: 0,
+                },
+                outputPath: "/tmp/result.md",
+                preview: "Done.",
+              },
+            ],
+          },
+        },
+        { expanded: false, isPartial: false },
+        { bold: (text: string) => text, fg: (_color: string, text: string) => text },
+        {},
+      )
+      .render(100)
+      .join("\n");
+
+    expect(rendered).toContain("(Ctrl+O to expand)");
   });
 });

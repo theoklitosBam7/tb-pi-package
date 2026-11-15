@@ -92,6 +92,7 @@ import {
   formatCancelReport,
   formatLaunchReport,
   formatMissingRun,
+  formatMissingRunCard,
   formatReportNotification,
   formatSendReport,
   formatStatusCard,
@@ -101,6 +102,7 @@ import {
   sanitizeText,
   shortPath,
   shortRunId,
+  statusColor,
   statusSymbol,
   toRunSummary,
   type RunSummary,
@@ -386,6 +388,7 @@ type SubagentDetails = Omit<PersistedSubagentDetails, "results"> & {
 interface AgentStatusDetails {
   runs?: RunSummary[];
   run?: RunSummary | null;
+  runId?: string;
 }
 
 interface AgentSendDetails {
@@ -438,6 +441,21 @@ interface CustomMessageView<T> {
   details?: T;
 }
 
+function messagePanel(theme: Theme, build: (content: Container) => void): Component {
+  const panel = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+  const content = new Container();
+  build(content);
+  panel.addChild(new LeftGutter(content, (text) => theme.fg("borderAccent", text)));
+  return panel;
+}
+
+function statusResultBody(details: AgentStatusDetails | undefined, fallback: string): string {
+  if (details?.run) return formatStatusCard(details.run, { compact: true });
+  if (details?.runId) return formatMissingRunCard(details.runId);
+  if (details?.runs) return formatStatusList(details.runs, { compact: true });
+  return fallback;
+}
+
 function renderSubagentResultMessage(
   message: CustomMessageView<SubagentResultDetails>,
   options: { expanded: boolean },
@@ -446,43 +464,40 @@ function renderSubagentResultMessage(
   const details = message.details;
   const run = details?.run;
   const result = details?.results?.[0];
-  const panel = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-  const content = new Container();
-  const status = run?.status;
-  const icon = status
-    ? theme.fg(
-        status === "completed" ? "success" : status === "running" ? "warning" : "error",
-        statusSymbol(status),
-      )
-    : theme.fg("muted", "•");
-  const agent = sanitizeText(run?.agent ?? result?.agent ?? "subagent");
-  const runId = details?.runId;
-  const header =
-    `${icon} ${theme.bold(theme.fg("customMessageLabel", "subagent"))} ` +
-    `${theme.fg("accent", agent)}` +
-    (runId ? theme.fg("muted", ` ${shortRunId(runId)}`) : "");
-  content.addChild(new Text(header, 0, 0));
+  return messagePanel(theme, (content) => {
+    const status = run?.status;
+    const icon = status
+      ? theme.fg(statusColor(status), statusSymbol(status))
+      : theme.fg("muted", "•");
+    const agent = sanitizeText(run?.agent ?? result?.agent ?? "subagent");
+    const runId = details?.runId;
+    const header =
+      `${icon} ${theme.bold(theme.fg("customMessageLabel", "subagent"))} ` +
+      `${theme.fg("accent", agent)}` +
+      (runId ? theme.fg("muted", ` ${shortRunId(runId)}`) : "");
+    content.addChild(new Text(header, 0, 0));
 
-  const usage = result ? formatResultUsageStats(result) : "";
-  const meta = [status ? `Run ${status}` : "", usage].filter(Boolean).join(" · ");
-  if (meta) content.addChild(new Text(theme.fg("muted", meta), 0, 0));
+    const usage = result ? formatResultUsageStats(result) : "";
+    const meta = [status ? `Run ${status}` : "", usage].filter(Boolean).join(" · ");
+    if (meta) content.addChild(new Text(theme.fg("muted", meta), 0, 0));
 
-  const task = run?.task ?? result?.task;
-  if (task) content.addChild(new Text(theme.fg("dim", sanitizeText(task).split("\n")[0]), 0, 0));
+    const task = run?.task ?? result?.task;
+    if (task) content.addChild(new Text(theme.fg("dim", sanitizeText(task).split("\n")[0]), 0, 0));
 
-  const artifactPath = run?.artifactPath ?? result?.outputPath;
-  if (artifactPath) {
-    const shown = shortPath(artifactPath, { maxWidth: options.expanded ? 200 : 80 });
-    content.addChild(new Text(theme.fg("muted", `Artifact  ${shown}`), 0, 0));
-  }
+    const artifactPath = run?.artifactPath ?? result?.outputPath;
+    if (artifactPath) {
+      const shown = shortPath(artifactPath, { maxWidth: options.expanded ? 200 : 80 });
+      content.addChild(new Text(theme.fg("muted", `Artifact  ${shown}`), 0, 0));
+    }
 
-  const preview = run?.preview ?? result?.preview;
-  if (preview) {
-    content.addChild(new Spacer(1));
-    content.addChild(new Text(theme.fg("customMessageText", preview), 0, 0));
-  }
+    const preview = run?.preview ?? result?.preview;
+    if (preview) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Text(theme.fg("customMessageText", preview), 0, 0));
+    }
 
-  if (options.expanded) {
+    if (!options.expanded) return;
+
     if (run && run.reportCount > 0) {
       content.addChild(new Spacer(1));
       content.addChild(new Text(theme.fg("muted", `Reports (${run.reportCount})`), 0, 0));
@@ -492,6 +507,23 @@ function renderSubagentResultMessage(
       const omitted = run.reportCount - run.reports.length;
       if (omitted > 0) {
         content.addChild(new Text(theme.fg("muted", `... ${omitted} more reports`), 0, 0));
+      }
+    }
+    if (run && run.messageCount > 0) {
+      content.addChild(new Spacer(1));
+      content.addChild(new Text(theme.fg("muted", `Messages (${run.messageCount})`), 0, 0));
+      for (const item of run.messages) {
+        content.addChild(
+          new Text(
+            theme.fg("dim", `${item.id} ${item.mode} ${item.outcome}: "${item.content}"`),
+            0,
+            0,
+          ),
+        );
+      }
+      const omitted = run.messageCount - run.messages.length;
+      if (omitted > 0) {
+        content.addChild(new Text(theme.fg("muted", `... ${omitted} more messages`), 0, 0));
       }
     }
     if (result?.errorMessage) {
@@ -505,10 +537,7 @@ function renderSubagentResultMessage(
     if (artifactPath) {
       content.addChild(new Text(theme.fg("muted", `Full artifact  ${artifactPath}`), 0, 0));
     }
-  }
-
-  panel.addChild(new LeftGutter(content, (text) => theme.fg("borderAccent", text)));
-  return panel;
+  });
 }
 
 function renderSubagentReportMessage(
@@ -517,33 +546,31 @@ function renderSubagentReportMessage(
   theme: Theme,
 ): Component {
   const details = message.details;
-  const panel = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-  const content = new Container();
-  const agent = details?.agent ? theme.fg("accent", sanitizeText(details.agent)) : "";
-  const runId = details?.runId ? theme.fg("muted", ` ${shortRunId(details.runId)}`) : "";
-  content.addChild(
-    new Text(
-      `${theme.fg("customMessageLabel", "✉ subagent report")}${agent ? ` ${agent}` : ""}${runId}`,
-      0,
-      0,
-    ),
-  );
-  content.addChild(new Spacer(1));
-  content.addChild(
-    new Markdown(
-      sanitizeText(
-        details?.content ?? (typeof message.content === "string" ? message.content : ""),
+  return messagePanel(theme, (content) => {
+    const agent = details?.agent ? theme.fg("accent", sanitizeText(details.agent)) : "";
+    const runId = details?.runId ? theme.fg("muted", ` ${shortRunId(details.runId)}`) : "";
+    content.addChild(
+      new Text(
+        `${theme.fg("customMessageLabel", "✉ subagent report")}${agent ? ` ${agent}` : ""}${runId}`,
+        0,
+        0,
       ),
-      0,
-      0,
-      getMarkdownTheme(),
-      {
-        color: (text) => theme.fg("customMessageText", text),
-      },
-    ),
-  );
-  panel.addChild(new LeftGutter(content, (text) => theme.fg("borderAccent", text)));
-  return panel;
+    );
+    content.addChild(new Spacer(1));
+    content.addChild(
+      new Markdown(
+        sanitizeText(
+          details?.content ?? (typeof message.content === "string" ? message.content : ""),
+        ),
+        0,
+        0,
+        getMarkdownTheme(),
+        {
+          color: (text) => theme.fg("customMessageText", text),
+        },
+      ),
+    );
+  });
 }
 
 type DisplayItem =
@@ -1716,31 +1743,25 @@ export default function (pi: ExtensionAPI) {
           if (event.type === "terminal") {
             asyncRunMetadata.delete(event.runId);
           }
-          const summary = event.type === "terminal" ? toRunSummary(event.run) : undefined;
-          const notificationRun: RunSummary | undefined = summary
-            ? { ...summary, error: undefined }
-            : undefined;
-          const content =
-            event.type === "report"
-              ? formatReportNotification({
-                  agent: event.agent,
-                  runId: event.runId,
-                  content: event.content,
-                })
-              : notificationRun
-                ? formatTerminalReport({
-                    run: notificationRun,
-                    otherRuns: (() => {
-                      const counts = manager?.countRuns(owner) ?? {
-                        active: 0,
-                        completed: 0,
-                        failed: 0,
-                      };
-                      const current = event.state.kind === "completed" ? "completed" : "failed";
-                      return { ...counts, [current]: Math.max(0, counts[current] - 1) };
-                    })(),
-                  })
-                : "";
+          const notificationRun: RunSummary | undefined =
+            event.type === "terminal"
+              ? { ...toRunSummary(event.run), error: undefined }
+              : undefined;
+          let content = "";
+          if (event.type === "report") {
+            content = formatReportNotification({
+              agent: event.agent,
+              runId: event.runId,
+              content: event.content,
+            });
+          } else if (notificationRun) {
+            const counts = manager?.countRuns(owner) ?? { active: 0, completed: 0, failed: 0 };
+            const current = event.state.kind === "completed" ? "completed" : "failed";
+            content = formatTerminalReport({
+              run: notificationRun,
+              otherRuns: { ...counts, [current]: Math.max(0, counts[current] - 1) },
+            });
+          }
           const result =
             event.type === "terminal" && "result" in event.state
               ? event.state.result?.value
@@ -1849,7 +1870,7 @@ export default function (pi: ExtensionAPI) {
         if (!snapshot) {
           return {
             content: [{ type: "text" as const, text: formatMissingRun(params.runId) }],
-            details: { run: null } satisfies AgentStatusDetails,
+            details: { run: null, runId: params.runId } satisfies AgentStatusDetails,
           };
         }
         const run = toRunSummary(snapshot);
@@ -1876,12 +1897,7 @@ export default function (pi: ExtensionAPI) {
       const details = result.details as AgentStatusDetails | undefined;
       const text = result.content[0];
       const fallback = text?.type === "text" ? text.text : "(no output)";
-      const body = details?.run
-        ? formatStatusCard(details.run, { compact: true })
-        : details?.runs
-          ? formatStatusList(details.runs, { compact: true })
-          : fallback;
-      return new Text(theme.fg("toolOutput", body), 0, 0);
+      return new Text(theme.fg("toolOutput", statusResultBody(details, fallback)), 0, 0);
     },
   });
   pi.registerTool({
@@ -2961,15 +2977,11 @@ export default function (pi: ExtensionAPI) {
             const preview = r.preview.split("\n").slice(0, 3).join("\n");
             text += `\n${theme.fg("toolOutput", preview)}`;
           }
-          text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
         } else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
-        else {
-          text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
-          if (displayItems.length > COLLAPSED_ITEM_COUNT)
-            text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
-        }
+        else text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
         const usageStr = formatResultUsageStats(r, r.model);
         if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
+        text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
         return new Text(text, 0, 0);
       }
 
