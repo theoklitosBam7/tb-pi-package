@@ -7,6 +7,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { getSubagentThinkingLabel, type SubagentThinkingLevel } from "../agents/agents.js";
+import { isRecord } from "../is-record.js";
 import { shortRunId } from "../presentation.js";
 import { formatModelProvenance, type ModelProvenance } from "../result.js";
 
@@ -24,10 +25,6 @@ export type AgentInspectorStatus =
   | "failed"
   | "aborted"
   | "timed out";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function boundedTail(text: string, max: number): string {
   if (text.length <= max) return text;
