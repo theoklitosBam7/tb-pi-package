@@ -1532,6 +1532,7 @@ export default function (pi: ExtensionAPI) {
     if (!manager) {
       manager = createRunManager({
         ...owner,
+        cleanupTimeoutMs: WATCHDOG_CLEANUP_GRACE_MS + WATCHDOG_CLOSE_WAIT_MS + 1_000,
         onNotification: (event) => {
           if (generation !== owner.generation) return;
           if (event.type === "terminal") {

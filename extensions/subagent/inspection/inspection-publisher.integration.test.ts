@@ -1,15 +1,16 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { createRequire } from "node:module";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { createAgentSession as CreateAgentSession } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
 import { isJsonRecord, waitForCondition } from "../test-support/pi-rpc-process.js";
+import { piSdkOverride, selectPiSdk } from "../test-support/pi-sdk.js";
 
 const generation = "fedcba9876543210fedcba9876543210";
-const sdkPath = process.env.INSPECTION_SDK_PATH;
+const sdkOverride = piSdkOverride();
+const selectedSdk = selectPiSdk();
 const earlyFailureMessage = "Simulated inspection failure while the child tool is blocked.";
 type InspectionSession = Awaited<ReturnType<typeof CreateAgentSession>>["session"];
 
@@ -46,18 +47,16 @@ async function runInspectionScenario({
   failWhileToolBlocked: boolean;
 }): Promise<void> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "inspection-sdk-"));
-  const sourceRoot = sdkPath ? path.join(directory, "source") : process.cwd();
-  if (sdkPath) {
-    const sdkRoot = fs.realpathSync(sdkPath);
+  const sourceRoot = sdkOverride ? path.join(directory, "source") : process.cwd();
+  if (sdkOverride) {
     fs.cpSync(path.resolve("extensions"), path.join(sourceRoot, "extensions"), { recursive: true });
     fs.mkdirSync(path.join(sourceRoot, "node_modules"), { recursive: true });
     fs.symlinkSync(
-      path.dirname(sdkRoot),
+      path.dirname(selectedSdk.root),
       path.join(sourceRoot, "node_modules", "@earendil-works"),
       "dir",
     );
-    const sdkRequire = createRequire(path.join(sdkRoot, "package.json"));
-    let typeboxRoot = path.dirname(sdkRequire.resolve("typebox"));
+    let typeboxRoot = path.dirname(selectedSdk.require.resolve("typebox"));
     while (!fs.existsSync(path.join(typeboxRoot, "package.json"))) {
       const parent = path.dirname(typeboxRoot);
       if (parent === typeboxRoot) throw new Error("Cannot find the selected SDK's TypeBox package");
@@ -65,14 +64,26 @@ async function runInspectionScenario({
     }
     fs.symlinkSync(typeboxRoot, path.join(sourceRoot, "node_modules", "typebox"), "dir");
   }
-  const sdk: typeof import("@earendil-works/pi-coding-agent") = sdkPath
-    ? await import(pathToFileURL(path.join(fs.realpathSync(sdkPath), "dist/index.js")).href)
-    : await import("@earendil-works/pi-coding-agent");
-  const { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager } = sdk;
-  if (sdkPath) {
-    const sdkRoot = fs.realpathSync(sdkPath);
-    expect(fs.realpathSync(sdk.getPackageDir())).toBe(sdkRoot);
-    const sdkManifest = JSON.parse(fs.readFileSync(path.join(sdkRoot, "package.json"), "utf8"));
+  const sdkModule: typeof import("@earendil-works/pi-coding-agent") = await import(
+    pathToFileURL(path.join(selectedSdk.root, "dist", "index.js")).href
+  );
+  const requiredCapabilities = [
+    "createAgentSession",
+    "createEventBus",
+    "DefaultResourceLoader",
+    "SessionManager",
+  ] as const;
+  const missingCapabilities = requiredCapabilities.filter((name) => sdkModule[name] === undefined);
+  if (missingCapabilities.length > 0) {
+    throw new Error(
+      `The selected Pi SDK at ${selectedSdk.root} is missing: ${missingCapabilities.join(", ")}`,
+    );
+  }
+  const { createAgentSession, createEventBus, DefaultResourceLoader, SessionManager } = sdkModule;
+  if (sdkOverride) {
+    const sdkManifest = JSON.parse(
+      fs.readFileSync(path.join(selectedSdk.root, "package.json"), "utf8"),
+    );
     const typeboxManifest = JSON.parse(
       fs.readFileSync(path.join(sourceRoot, "node_modules", "typebox", "package.json"), "utf8"),
     );

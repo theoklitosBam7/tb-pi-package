@@ -43,6 +43,7 @@ Detailed guides live in [`docs/`](docs/):
 | Document                                           | Covers                                                            |
 | -------------------------------------------------- | ----------------------------------------------------------------- |
 | [Extensions](docs/extensions.md)                   | Tools and slash commands each extension adds                      |
+| [SDK compatibility](docs/compatibility.md)         | Supported Pi versions and how to test another SDK                 |
 | [Automatic recaps](docs/automatic-recaps.md)       | Global `/summary` settings, task scope, and limits                |
 | [Web search and fetch](docs/web-search.md)         | Search, fetch, pagination, and safety limits                      |
 | [Subagent tool](docs/subagent-tool.md)             | Synchronous and asynchronous tasks, messages, reports, and limits |

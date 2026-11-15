@@ -1,0 +1,59 @@
+name: Compatibility
+
+on:
+  pull_request:
+    paths:
+      - .node-version
+      - .github/workflows/compatibility.yml
+      - docs/compatibility.md
+      - docs/portable-inspection.md
+      - extensions/subagent/**
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - scripts/**
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compatibility-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  minimum-sdk:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Read the minimum Pi version
+        id: minimum
+        run: node scripts/pi-minimum-version.mjs >> "$GITHUB_OUTPUT"
+
+      - name: Install the minimum Pi SDK
+        id: sdk
+        run: node scripts/prepare-pi-sdk.mjs "${{ steps.minimum.outputs.version }}" "$RUNNER_TEMP/pi-sdk" >> "$GITHUB_OUTPUT"
+
+      - name: Run integration tests against the minimum SDK
+        env:
+          PI_SDK_PATH: ${{ steps.sdk.outputs.path }}
+        run: pnpm test:integration
