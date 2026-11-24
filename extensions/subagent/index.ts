@@ -27,18 +27,11 @@ import {
   type Theme,
   withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Box,
-  type Component,
-  Container,
-  Markdown,
-  Spacer,
-  Text,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { Box, type Component, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { createInspectionPublisher } from "./inspection/inspection-publisher.js";
 import { isRecord } from "./is-record.js";
 import { Type } from "typebox";
+import { LeftGutter } from "../lib/left-gutter.js";
 import {
   addUsageTotals,
   addUsageTotalsWithTurns,
@@ -415,24 +408,6 @@ interface SubagentReportDetails {
   runId: string;
   eventId: string;
   agent?: string;
-}
-
-class LeftGutter implements Component {
-  constructor(
-    private readonly child: Component,
-    private readonly border: (text: string) => string,
-  ) {}
-
-  invalidate(): void {
-    this.child.invalidate?.();
-  }
-
-  render(width: number): readonly string[] {
-    if (width < 2) return this.child.render(width);
-    const prefix = width >= 3 ? `${this.border("▌")} ` : this.border("▌");
-    const contentWidth = Math.max(1, width - visibleWidth(prefix));
-    return this.child.render(contentWidth).map((line) => `${prefix}${line}`);
-  }
 }
 
 interface CustomMessageView<T> {

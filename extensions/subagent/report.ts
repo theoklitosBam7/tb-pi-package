@@ -30,6 +30,10 @@ function sendJson(socket: Socket, response: ReportDecision): void {
   socket.end(`${JSON.stringify(response)}\n`);
 }
 
+function toBuffer(chunk: string | Uint8Array): Buffer {
+  return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+}
+
 export async function createReportServer(options: {
   runId: string;
   onReport(report: ChildReport): Promise<ReportDecision> | ReportDecision;
@@ -73,8 +77,7 @@ export async function createReportServer(options: {
     let completed = false;
     socket.on("data", (chunk) => {
       if (completed) return;
-      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      frame = Buffer.concat([frame, bytes]);
+      frame = Buffer.concat([frame, toBuffer(chunk)]);
       if (frame.byteLength > MAX_FRAME_BYTES) {
         completed = true;
         sendJson(socket, { accepted: false, reason: "Report exceeds the size limit" });
@@ -247,8 +250,7 @@ async function submitReport(message: string): Promise<ReportDecision> {
       socket.write(`${JSON.stringify({ runId, token, reportId: randomUUID(), message })}\n`);
     });
     socket.on("data", (chunk) => {
-      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      data = Buffer.concat([data, bytes]);
+      data = Buffer.concat([data, toBuffer(chunk)]);
       if (data.byteLength > 1024) {
         socket.destroy();
         finish(new Error("Parent returned an oversized report decision"));

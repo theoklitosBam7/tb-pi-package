@@ -9,16 +9,9 @@ import type {
   SessionTreeEvent,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Box,
-  Container,
-  Markdown,
-  Spacer,
-  Text,
-  visibleWidth,
-  type Component,
-} from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { LeftGutter } from "../lib/left-gutter.js";
 import {
   DEFAULT_SUMMARY_CONFIG,
   loadSummaryConfig,
@@ -68,24 +61,6 @@ function isTaskMessage(message: ProjectedMessage): message is TaskMessage {
 const MAX_RECORD_CHARS = 48000;
 const RECAP_TIMEOUT_MS = 60000;
 const MAX_RECAP_TOKENS = 8192;
-
-class LeftGutter implements Component {
-  constructor(
-    private readonly child: Component,
-    private readonly border: (text: string) => string,
-  ) {}
-
-  invalidate(): void {
-    this.child.invalidate?.();
-  }
-
-  render(width: number): readonly string[] {
-    if (width < 2) return this.child.render(width);
-    const prefix = width >= 3 ? `${this.border("▌")} ` : this.border("▌");
-    const contentWidth = Math.max(1, width - visibleWidth(prefix));
-    return this.child.render(contentWidth).map((line) => `${prefix}${line}`);
-  }
-}
 
 function summaryExtension(pi: SummaryHost, path = summaryConfigPath()): void {
   pi.registerCommand("summary", {
