@@ -1,13 +1,18 @@
 import { pathToFileURL } from "node:url";
 import type {
   EntryRenderer,
+  EntryRenderOptions,
   ExtensionAPI,
   MessageRenderer,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import summaryExtension from "../summary/index.js";
-import subagentExtension from "./index.js";
+import subagentExtension, {
+  type SubagentReportDetails,
+  type SubagentResultDetails,
+} from "./index.js";
+import { selectPiSdk } from "./test-support/pi-sdk.js";
 
 // Route the extensions' SDK imports to the real packages selected for this run.
 vi.mock("@earendil-works/pi-coding-agent", async () => {
@@ -15,9 +20,9 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
   return import(pathToFileURL(selectPiSdk().entryPath).href);
 });
 vi.mock("@earendil-works/pi-tui", async () => {
-  const { findPiDependency, selectPiSdk } = await import("./test-support/pi-sdk.js");
-  const tuiRoot = findPiDependency(selectPiSdk(), "@earendil-works/pi-tui");
-  return import(pathToFileURL(`${tuiRoot}/dist/index.js`).href);
+  const { selectPiSdk } = await import("./test-support/pi-sdk.js");
+  const entry = selectPiSdk().require.resolve("@earendil-works/pi-tui");
+  return import(pathToFileURL(entry).href);
 });
 
 import { createEventBus, initTheme } from "@earendil-works/pi-coding-agent";
@@ -30,13 +35,16 @@ const theme = {
   bold: (text: string) => text,
 } as unknown as Theme;
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+const expanded = { expanded: false };
+// Pi 1.4 calls renderers without keybinding helpers. The development declarations require them.
+const entryOptions = selectPiSdk().version.startsWith("1.4.")
+  ? (expanded as EntryRenderOptions)
+  : { ...expanded, keyText: () => "", keyHint: () => "" };
+const messageOptions = { ...entryOptions, outputPad: 0 };
 
 describe("selected Pi SDK renderer compatibility", () => {
   it("[integration] renders the summary entry through its registered callback", () => {
-    let renderer: EntryRenderer<any> | undefined;
+    let renderer: EntryRenderer | undefined;
     summaryExtension(
       {
         appendEntry() {},
@@ -45,7 +53,7 @@ describe("selected Pi SDK renderer compatibility", () => {
         },
         registerCommand() {},
         registerEntryRenderer(_type, callback) {
-          renderer = callback;
+          renderer = callback as EntryRenderer;
         },
       },
       "/tmp/summary-compatibility.json",
@@ -67,11 +75,7 @@ describe("selected Pi SDK renderer compatibility", () => {
           usage: { totalTokens: 15 },
         },
       },
-      {
-        expanded: false,
-        keyText: () => "",
-        keyHint: () => "",
-      },
+      entryOptions,
       theme,
     );
     if (!component) throw new Error("The summary entry renderer returned no component");
@@ -83,16 +87,18 @@ describe("selected Pi SDK renderer compatibility", () => {
   });
 
   it("[integration] renders subagent result and report messages through their registered callbacks", () => {
-    const renderers = new Map<string, MessageRenderer<any>>();
+    const renderers = new Map<string, MessageRenderer>();
+    const events = createEventBus();
+    onTestFinished(() => events.clear());
     subagentExtension({
-      events: createEventBus(),
+      events,
       on() {},
       sendMessage() {},
       registerTool() {},
       registerCommand() {},
       registerShortcut() {},
-      registerMessageRenderer(customType: string, callback: MessageRenderer<any>) {
-        renderers.set(customType, callback);
+      registerMessageRenderer<T>(customType: string, callback: MessageRenderer<T>) {
+        renderers.set(customType, callback as MessageRenderer);
       },
     } as unknown as ExtensionAPI);
 
@@ -110,23 +116,34 @@ describe("selected Pi SDK renderer compatibility", () => {
         content: "Agent scout completed.",
         details: {
           runId: "1063e371-3864-4f21-91d9-1e47886f4236",
+          mode: "single",
+          agentScope: "both",
+          projectAgentsDir: null,
           results: [
             {
               agent: "scout",
+              agentSource: "unknown",
+              exitCode: 0,
+              messages: [],
+              stderr: "",
+              thinkingKind: "default",
               task: "Check renderer compatibility.",
               preview: "Renderer compatibility check passed.",
               outputPath: "/tmp/renderer-result.md",
-              usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 },
+              usage: {
+                input: 10,
+                output: 2,
+                cacheRead: 0,
+                cacheWrite: 0,
+                cost: 0,
+                turns: 1,
+                contextTokens: 0,
+              },
             },
           ],
-        },
+        } satisfies SubagentResultDetails,
       },
-      {
-        expanded: false,
-        outputPad: 0,
-        keyText: () => "",
-        keyHint: () => "",
-      },
+      messageOptions,
       theme,
     );
     if (!resultComponent) throw new Error("The subagent result renderer returned no component");
@@ -142,14 +159,9 @@ describe("selected Pi SDK renderer compatibility", () => {
           runId: "1063e371-3864-4f21-91d9-1e47886f4236",
           eventId: "1063e371-3864-4f21-91d9-1e47886f4236:1",
           agent: "scout",
-        },
+        } satisfies SubagentReportDetails,
       },
-      {
-        expanded: false,
-        outputPad: 0,
-        keyText: () => "",
-        keyHint: () => "",
-      },
+      messageOptions,
       theme,
     );
     if (!reportComponent) throw new Error("The subagent report renderer returned no component");

@@ -4,13 +4,17 @@ import { expect, it } from "vitest";
 
 const scriptPath = fileURLToPath(new URL("./resolve-version.mjs", import.meta.url));
 
-it("[process integration] resolves the lowest valid version from alternative ranges", () => {
-  const result = spawnSync(process.execPath, [scriptPath, ">=24.0.0 || ^22.22.3"], {
-    encoding: "utf8",
-  });
+it.each([
+  [">=24.0.0 || ^22.22.3", "22.22.3"],
+  [">=22.22.3 <22.22.3 || >=24.0.0", "24.0.0"],
+  ["* || 0.0.0-alpha", "0.0.0"],
+  [`>0.0.0-${"a".repeat(250)} <0.0.0 || 0.0.0`, "0.0.0"],
+  [">=1.2.4-0 <1.2.4-0 || >1.2.3 <1.2.4-alpha || >=2.0.0", "1.2.4-0"],
+])("[process integration] resolves the minimum of %s", (range, version) => {
+  const result = spawnSync(process.execPath, [scriptPath, range], { encoding: "utf8" });
 
   expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toBe("version=22.22.3\n");
+  expect(result.stdout).toBe(`version=${version}\n`);
 });
 
 it("[process integration] reports malformed version ranges with context", () => {

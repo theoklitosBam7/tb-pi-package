@@ -399,12 +399,12 @@ interface AsyncLaunchDetails extends SubagentDetails {
   runs: RunSummary[];
 }
 
-interface SubagentResultDetails extends SubagentDetails {
+export interface SubagentResultDetails extends SubagentDetails {
   runId: string;
   run?: RunSummary;
 }
 
-interface SubagentReportDetails {
+export interface SubagentReportDetails {
   runId: string;
   eventId: string;
   agent?: string;
