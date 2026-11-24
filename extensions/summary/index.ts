@@ -79,7 +79,7 @@ class LeftGutter implements Component {
     this.child.invalidate?.();
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     if (width < 2) return this.child.render(width);
     const prefix = width >= 3 ? `${this.border("▌")} ` : this.border("▌");
     const contentWidth = Math.max(1, width - visibleWidth(prefix));

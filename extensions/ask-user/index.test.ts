@@ -363,7 +363,7 @@ describe("ask_user", () => {
       },
     );
 
-    let rendered: string[] = [];
+    let rendered: readonly string[] = [];
     expect(() => {
       rendered = component.render(80);
     }).not.toThrow();
