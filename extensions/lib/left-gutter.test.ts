@@ -4,21 +4,11 @@ import { LeftGutter } from "./left-gutter.js";
 
 const border = (text: string): string => `\u001b[31m${text}\u001b[0m`;
 
-function cachedLineSource(lines: string[], widths: number[]): Component {
+function lineSource(widths: number[], linesForWidth: (width: number) => string[]): Component {
   return {
     render(width) {
       widths.push(width);
-      return lines;
-    },
-    invalidate() {},
-  };
-}
-
-function sizedLineSource(widths: number[]): Component {
-  return {
-    render(width) {
-      widths.push(width);
-      return ["x".repeat(width)];
+      return linesForWidth(width);
     },
     invalidate() {},
   };
@@ -28,7 +18,10 @@ describe("LeftGutter", () => {
   it("does not expose the child's cached lines", () => {
     const lines = ["short"];
     const widths: number[] = [];
-    const gutter = new LeftGutter(cachedLineSource(lines, widths), border);
+    const gutter = new LeftGutter(
+      lineSource(widths, () => lines),
+      border,
+    );
 
     const rendered = gutter.render(1);
 
@@ -40,7 +33,10 @@ describe("LeftGutter", () => {
 
   it("clamps the content width at width two", () => {
     const widths: number[] = [];
-    const gutter = new LeftGutter(sizedLineSource(widths), border);
+    const gutter = new LeftGutter(
+      lineSource(widths, (width) => ["x".repeat(width)]),
+      border,
+    );
 
     const rendered = gutter.render(2);
 
@@ -51,7 +47,10 @@ describe("LeftGutter", () => {
 
   it("reserves a space after the border at width four", () => {
     const widths: number[] = [];
-    const gutter = new LeftGutter(sizedLineSource(widths), border);
+    const gutter = new LeftGutter(
+      lineSource(widths, (width) => ["x".repeat(width)]),
+      border,
+    );
 
     const rendered = gutter.render(4);
 
