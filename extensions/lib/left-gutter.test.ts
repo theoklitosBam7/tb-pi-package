@@ -25,7 +25,7 @@ function sizedLineSource(widths: number[]): Component {
 }
 
 describe("LeftGutter", () => {
-  it("returns a new array when the child lines pass through unchanged", () => {
+  it("does not expose the child's cached lines", () => {
     const lines = ["short"];
     const widths: number[] = [];
     const gutter = new LeftGutter(cachedLineSource(lines, widths), border);
@@ -34,7 +34,8 @@ describe("LeftGutter", () => {
 
     expect(widths).toEqual([1]);
     expect(rendered).toEqual(lines);
-    expect(rendered).not.toBe(lines);
+    rendered.push("extra");
+    expect(lines).toEqual(["short"]);
   });
 
   it("clamps the content width at width two", () => {

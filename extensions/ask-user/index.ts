@@ -262,6 +262,7 @@ function createQuestionComponent(
     },
     render(outerWidth) {
       const width = Math.max(3, outerWidth) - 2;
+      // SDK 1.4 requires a mutable array, while 1.6 may return a cached readonly array.
       if (inputMode) return frame([...container.render(width)], Math.max(3, outerWidth));
 
       const header = createQuestionHeader().render(width);
