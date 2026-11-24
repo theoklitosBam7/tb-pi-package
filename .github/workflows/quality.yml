@@ -28,27 +28,34 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve Node version
-        id: node
-        run: |
-          if [ "${{ matrix.node-source }}" = "pin" ]; then
-            version=$(node -p "require('node:fs').readFileSync('.node-version', 'utf8').trim()")
-          else
-            version=$(node -p "require('./package.json').engines.node.match(/[0-9]+\.[0-9]+\.[0-9]+/)[0]")
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
       - name: Set up pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - name: Set up Node.js
+      - name: Set up pinned Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: ${{ steps.node.outputs.version }}
+          node-version-file: .node-version
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Resolve the Node support floor
+        if: matrix.node-source == 'support-floor'
+        id: node
+        run: |
+          range=$(node -p "require('./package.json').engines.node")
+          node scripts/resolve-version.mjs "$range" >> "$GITHUB_OUTPUT"
+
+      - name: Set up the support-floor Node.js
+        if: matrix.node-source == 'support-floor'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+
+      - name: Check installation on the support floor
+        if: matrix.node-source == 'support-floor'
         run: pnpm install --frozen-lockfile
 
       - name: Check formatting

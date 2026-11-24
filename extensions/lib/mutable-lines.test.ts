@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mutableLines } from "./mutable-lines.js";
+import { copyRenderLines } from "./mutable-lines.js";
 
-describe("mutableLines", () => {
+describe("copyRenderLines", () => {
   it("copies cached lines before mutation", () => {
     const lines = Object.freeze(["line"]);
-    const copy = mutableLines(lines);
+    const copy = copyRenderLines(lines);
 
     expect(copy).toEqual(lines);
 

@@ -24,7 +24,7 @@ PI_SDK_PATH=/path/to/pi-coding-agent pnpm test:integration
 
 The test support rejects a directory that is not a Pi coding agent package or that has no `dist/cli.js` or `dist/index.js`. It logs the version and path of each selected SDK once.
 
-The integration tests check behavior: event-bus delivery, publication, and RPC execution. They do not compare version strings or file hashes. If the selected SDK lacks a required export, the test names it.
+The integration tests check behavior: event-bus delivery, publication, RPC execution, and summary/subagent renderer callbacks rendered with the selected SDK's TUI dependency. They do not compare version strings or file hashes. If the selected SDK lacks a required export, the test names it.
 
 ## Upgrades
 

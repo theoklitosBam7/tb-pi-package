@@ -21,7 +21,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
-import { mutableLines } from "../lib/mutable-lines.js";
+import { copyRenderLines } from "../lib/mutable-lines.js";
 
 const AskUserOptionSchema = Type.Object({
   label: Type.String({ description: "Display label for the option" }),
@@ -263,7 +263,8 @@ function createQuestionComponent(
     },
     render(outerWidth) {
       const width = Math.max(3, outerWidth) - 2;
-      if (inputMode) return frame(mutableLines(container.render(width)), Math.max(3, outerWidth));
+      if (inputMode)
+        return frame(copyRenderLines(container.render(width)), Math.max(3, outerWidth));
 
       const header = createQuestionHeader().render(width);
       const prompt = createQuestionPrompt().render(width);

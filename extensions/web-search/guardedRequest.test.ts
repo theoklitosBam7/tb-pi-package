@@ -23,6 +23,7 @@ const replies: {
   body?: string | Buffer;
   hold?: boolean;
   holdHeaders?: boolean;
+  unsupportedChunk?: unknown;
 }[] = [];
 const opened: PassThrough[] = [];
 function reply(
@@ -51,6 +52,13 @@ function transport() {
           });
           const res = stream;
           opened.push(res);
+          if (Object.hasOwn(next, "unsupportedChunk")) {
+            Object.defineProperty(res, Symbol.asyncIterator, {
+              value: async function* () {
+                yield next.unsupportedChunk;
+              },
+            });
+          }
           queueMicrotask(() => {
             onResponse?.(res as unknown as IncomingMessage);
             if (!next.hold) res.end(next.body ?? "");
@@ -217,6 +225,17 @@ describe("guardedRequest", () => {
     reply(200, { "content-type": "text/plain", "content-encoding": "zstd" }, "data");
     await expect(guardedRequest("https://example.com/", { maxBytes: 10 })).rejects.toThrow(
       /encoding/i,
+    );
+  });
+
+  it("rejects an unsupported response chunk", async () => {
+    replies.push({
+      status: 200,
+      headers: { "content-type": "text/plain" },
+      unsupportedChunk: { unexpected: true },
+    });
+    await expect(guardedRequest("https://example.com/", { maxBytes: 100 })).rejects.toThrow(
+      "Unsupported response chunk",
     );
   });
 

@@ -1,5 +1,5 @@
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
-import { mutableLines } from "./mutable-lines.js";
+import { copyRenderLines } from "./mutable-lines.js";
 
 export class LeftGutter implements Component {
   constructor(
@@ -12,7 +12,7 @@ export class LeftGutter implements Component {
   }
 
   render(width: number): string[] {
-    if (width < 2) return mutableLines(this.child.render(width));
+    if (width < 2) return copyRenderLines(this.child.render(width));
     const prefix = width >= 3 ? `${this.border("▌")} ` : this.border("▌");
     const contentWidth = Math.max(1, width - visibleWidth(prefix));
     return this.child.render(contentWidth).map((line) => `${prefix}${line}`);

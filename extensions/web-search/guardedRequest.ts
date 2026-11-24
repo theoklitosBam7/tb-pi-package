@@ -151,7 +151,7 @@ async function readCompressedBody({
   let downloadTruncated = false;
   try {
     for await (const chunk of decompressor) {
-      const bytes = toBuffer(chunk);
+      const bytes = responseChunkBytes(chunk);
       const remaining = maxBytes - size;
       chunks.push(bytes.subarray(0, remaining));
       size += Math.min(bytes.length, remaining);
@@ -173,6 +173,13 @@ async function readCompressedBody({
     }
   }
   return { body: Buffer.concat(chunks, size), downloadTruncated };
+}
+
+function responseChunkBytes(chunk: unknown): Buffer {
+  if (typeof chunk !== "string" && !(chunk instanceof Uint8Array)) {
+    throw new GuardedRequestError("Unsupported response chunk");
+  }
+  return toBuffer(chunk);
 }
 
 function acceptedContentType(header: string): boolean {
@@ -275,7 +282,7 @@ async function requestOnce({
   let downloadTruncated = false;
   try {
     for await (const chunk of response) {
-      const bytes = toBuffer(chunk);
+      const bytes = responseChunkBytes(chunk);
       const remaining = maxBytes - size;
       chunks.push(bytes.subarray(0, remaining));
       size += Math.min(bytes.length, remaining);
