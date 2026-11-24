@@ -66,6 +66,10 @@ tb-pi-package/
 │   │   └── index.ts
 │   ├── commands.ts      # /commands slash command
 │   ├── lib/              # Shared extension helpers
+│   │   ├── isMissingFileError.ts
+│   │   ├── left-gutter.ts
+│   │   ├── mutable-lines.ts
+│   │   ├── to-buffer.ts
 │   │   └── usage.ts      # Usage parsing and aggregation
 │   ├── list-agents.ts   # /agents command + list_agents tool
 │   ├── session-costs/   # /session-costs slash command
