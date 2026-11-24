@@ -237,7 +237,7 @@ function createQuestionComponent(
 
   rebuild();
 
-  function frame(lines: readonly string[], width: number): string[] {
+  function frame(lines: string[], width: number): string[] {
     const panel = new Box(0, 0, (line) => theme.bg("customMessageBg", line));
     panel.addChild({ render: () => lines, invalidate() {} });
     const fill = panel.render(width - 2);
@@ -262,7 +262,7 @@ function createQuestionComponent(
     },
     render(outerWidth) {
       const width = Math.max(3, outerWidth) - 2;
-      if (inputMode) return frame(container.render(width), Math.max(3, outerWidth));
+      if (inputMode) return frame([...container.render(width)], Math.max(3, outerWidth));
 
       const header = createQuestionHeader().render(width);
       const prompt = createQuestionPrompt().render(width);
