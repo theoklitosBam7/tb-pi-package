@@ -1,5 +1,10 @@
 import { pathToFileURL } from "node:url";
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type {
+  EntryRenderer,
+  ExtensionAPI,
+  MessageRenderer,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import summaryExtension from "../summary/index.js";
 import subagentExtension from "./index.js";
@@ -16,16 +21,8 @@ vi.mock("@earendil-works/pi-tui", async () => {
 });
 
 import { createEventBus, initTheme } from "@earendil-works/pi-coding-agent";
-import type { Box } from "@earendil-works/pi-tui";
 
 initTheme();
-
-type RenderedComponent = Box;
-type SubagentRenderer = (
-  message: { content: string; details?: unknown },
-  options: { expanded: boolean },
-  theme: Theme,
-) => RenderedComponent;
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -39,13 +36,7 @@ afterEach(() => {
 
 describe("selected Pi SDK renderer compatibility", () => {
   it("[integration] renders the summary entry through its registered callback", () => {
-    let renderer:
-      | ((
-          entry: { data: unknown },
-          options: { expanded: boolean },
-          theme: Theme,
-        ) => RenderedComponent)
-      | undefined;
+    let renderer: EntryRenderer<any> | undefined;
     summaryExtension(
       {
         appendEntry() {},
@@ -54,15 +45,20 @@ describe("selected Pi SDK renderer compatibility", () => {
         },
         registerCommand() {},
         registerEntryRenderer(_type, callback) {
-          renderer = callback as typeof renderer;
+          renderer = callback;
         },
       },
       "/tmp/summary-compatibility.json",
     );
 
     if (!renderer) throw new Error("The summary entry renderer was not registered");
-    const output = renderer(
+    const component = renderer(
       {
+        type: "custom",
+        id: "summary-entry-1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        customType: "summary",
         data: {
           provider: "openai",
           model: "gpt-6-luna",
@@ -71,11 +67,15 @@ describe("selected Pi SDK renderer compatibility", () => {
           usage: { totalTokens: 15 },
         },
       },
-      { expanded: false },
+      {
+        expanded: false,
+        keyText: () => "",
+        keyHint: () => "",
+      },
       theme,
-    )
-      .render(80)
-      .join("\n");
+    );
+    if (!component) throw new Error("The summary entry renderer returned no component");
+    const output = component.render(80).join("\n");
 
     expect(output).toContain("[recap]");
     expect(output).toContain("openai/gpt-6-luna");
@@ -83,7 +83,7 @@ describe("selected Pi SDK renderer compatibility", () => {
   });
 
   it("[integration] renders subagent result and report messages through their registered callbacks", () => {
-    const renderers = new Map<string, SubagentRenderer>();
+    const renderers = new Map<string, MessageRenderer<any>>();
     subagentExtension({
       events: createEventBus(),
       on() {},
@@ -91,8 +91,8 @@ describe("selected Pi SDK renderer compatibility", () => {
       registerTool() {},
       registerCommand() {},
       registerShortcut() {},
-      registerMessageRenderer(customType: string, callback: unknown) {
-        renderers.set(customType, callback as SubagentRenderer);
+      registerMessageRenderer(customType: string, callback: MessageRenderer<any>) {
+        renderers.set(customType, callback);
       },
     } as unknown as ExtensionAPI);
 
@@ -101,8 +101,12 @@ describe("selected Pi SDK renderer compatibility", () => {
     if (!resultRenderer || !reportRenderer) {
       throw new Error("The subagent result and report renderers were not registered");
     }
-    const result = resultRenderer(
+    const resultComponent = resultRenderer(
       {
+        role: "custom",
+        customType: "subagent-result",
+        display: true,
+        timestamp: Date.now(),
         content: "Agent scout completed.",
         details: {
           runId: "1063e371-3864-4f21-91d9-1e47886f4236",
@@ -117,13 +121,22 @@ describe("selected Pi SDK renderer compatibility", () => {
           ],
         },
       },
-      { expanded: false },
-      theme,
-    )
-      .render(80)
-      .join("\n");
-    const report = reportRenderer(
       {
+        expanded: false,
+        outputPad: 0,
+        keyText: () => "",
+        keyHint: () => "",
+      },
+      theme,
+    );
+    if (!resultComponent) throw new Error("The subagent result renderer returned no component");
+    const result = resultComponent.render(80).join("\n");
+    const reportComponent = reportRenderer(
+      {
+        role: "custom",
+        customType: "subagent-report",
+        display: true,
+        timestamp: Date.now(),
         content: "Agent scout report (run 1063e371):\nDiscovery complete.",
         details: {
           runId: "1063e371-3864-4f21-91d9-1e47886f4236",
@@ -131,11 +144,16 @@ describe("selected Pi SDK renderer compatibility", () => {
           agent: "scout",
         },
       },
-      { expanded: false },
+      {
+        expanded: false,
+        outputPad: 0,
+        keyText: () => "",
+        keyHint: () => "",
+      },
       theme,
-    )
-      .render(80)
-      .join("\n");
+    );
+    if (!reportComponent) throw new Error("The subagent report renderer returned no component");
+    const report = reportComponent.render(80).join("\n");
 
     expect(result).toContain("scout");
     expect(result).toContain("Renderer compatibility check passed.");
