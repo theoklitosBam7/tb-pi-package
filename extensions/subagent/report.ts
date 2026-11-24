@@ -6,6 +6,7 @@ import { createServer, connect, type Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { toBuffer } from "../lib/to-buffer.js";
 import { isRecord } from "./is-record.js";
 
 const MAX_REPORT_BYTES = 8 * 1024;
@@ -28,10 +29,6 @@ export type ReportServer = {
 
 function sendJson(socket: Socket, response: ReportDecision): void {
   socket.end(`${JSON.stringify(response)}\n`);
-}
-
-function toBuffer(chunk: string | Uint8Array): Buffer {
-  return Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 }
 
 export async function createReportServer(options: {

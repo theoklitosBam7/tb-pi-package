@@ -7,7 +7,7 @@ export class LeftGutter implements Component {
   ) {}
 
   invalidate(): void {
-    this.child.invalidate?.();
+    this.child.invalidate();
   }
 
   render(width: number): string[] {

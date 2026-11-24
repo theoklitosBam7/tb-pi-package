@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
+import { toBuffer } from "../lib/to-buffer.js";
 
 const DEADLINE_MS = 15_000;
 const MAX_REDIRECTS = 10;
@@ -150,7 +151,7 @@ async function readCompressedBody({
   let downloadTruncated = false;
   try {
     for await (const chunk of decompressor) {
-      const bytes: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const bytes = toBuffer(chunk);
       const remaining = maxBytes - size;
       chunks.push(bytes.subarray(0, remaining));
       size += Math.min(bytes.length, remaining);
@@ -274,7 +275,7 @@ async function requestOnce({
   let downloadTruncated = false;
   try {
     for await (const chunk of response) {
-      const bytes: Buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const bytes = toBuffer(chunk);
       const remaining = maxBytes - size;
       chunks.push(bytes.subarray(0, remaining));
       size += Math.min(bytes.length, remaining);

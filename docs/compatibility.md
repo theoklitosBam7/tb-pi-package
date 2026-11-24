@@ -8,6 +8,12 @@ The package supports the Pi SDK versions allowed by the peer dependency range in
 - The `Compatibility` workflow reads the minimum version from the peer range, installs that version, and runs `pnpm test:integration` against it.
 - Intermediate versions are not all tested. A pass at the minimum and at the development version is the support signal.
 
+## Node versions
+
+`.node-version` selects the Node version for development and CI. `engines.node` declares the oldest supported Node version. The `Quality` workflow tests both versions.
+
+`@types/node` tracks the pinned Node version. Type checking against newer Node types does not prove that an API works on the support floor. The floor job runs the same tests on the oldest supported Node version. Code that uses APIs newer than that floor needs runtime coverage there, or the floor must be raised.
+
 ## Test another SDK
 
 Set `PI_SDK_PATH` to the root directory of a `@earendil-works/pi-coding-agent` package. Then run the integration tests:
