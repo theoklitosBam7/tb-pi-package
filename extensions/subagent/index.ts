@@ -428,7 +428,7 @@ class LeftGutter implements Component {
   }
 
   render(width: number): string[] {
-    if (width < 2) return this.child.render(width);
+    if (width < 2) return [...this.child.render(width)];
     const prefix = width >= 3 ? `${this.border("▌")} ` : this.border("▌");
     const contentWidth = Math.max(1, width - visibleWidth(prefix));
     return this.child.render(contentWidth).map((line) => `${prefix}${line}`);
