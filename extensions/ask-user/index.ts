@@ -237,7 +237,7 @@ function createQuestionComponent(
 
   rebuild();
 
-  function frame(lines: string[], width: number): string[] {
+  function frame(lines: readonly string[], width: number): string[] {
     const panel = new Box(0, 0, (line) => theme.bg("customMessageBg", line));
     panel.addChild({ render: () => lines, invalidate() {} });
     const fill = panel.render(width - 2);

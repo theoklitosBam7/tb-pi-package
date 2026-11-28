@@ -1,25 +1,22 @@
 # tb-pi-package
 
-A collection of extensions and agent definitions for [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) — the AI coding agent.
+Extensions, subagents, and workflow prompts for [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent), the AI coding agent.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
-## About
-
-This package extends pi with custom tools, slash commands, specialized subagents, and prompt templates for code review, implementation, research, and multi-agent orchestration.
+[![Quality](https://github.com/theoklitosBam7/tb-pi-package/actions/workflows/quality.yml/badge.svg)](https://github.com/theoklitosBam7/tb-pi-package/actions/workflows/quality.yml)
 
 ## Features
 
-- **Subagent tool** — Delegate tasks to specialized agents with isolated context windows. Supports synchronous single, parallel, and chained (sequential) execution, plus asynchronous single and parallel runs that the parent can message and monitor.
-- **Ask user tool** — Ask one or more structured questions and collect answers in TUI or RPC mode.
-- **Web search & fetch** — Search DuckDuckGo and fetch page content directly from pi.
-- **Agent discovery** — Browse and inspect available agents interactively via `/agents`.
-- **Commands browser** — List all registered slash commands via `/commands`.
-- **Session cost report** — View main-agent, subagent, nested, and combined token and cost totals with `/session-costs`.
-- **Automatic recaps** — Recap completed work with a separate model. Use `/summary` to save the global model and thinking level in `~/.pi/agent/summary.json` (defaults: `openai/gpt-6-luna`, thinking `medium`), `/summary status` to inspect them, or `/summary reset` to restore the defaults. These requests add provider costs.
-- **Voice dictation** — Select a Foundry Local speech model with `/dictate model`, then use `/dictate` or Control+Option+R to add speech to the editor.
-- **6 built-in agents:** Generalist, oracle, scout, researcher, implementer, and reviewer.
-- **Workflow prompts:** Reusable templates for scouting, research, implementation, review, implementation review, and wiki generation.
+- **Subagent tool**: delegate work to specialized agents with isolated context windows. Single, parallel, and chained runs are synchronous by default; single and parallel runs can also start asynchronously, so the parent can message and monitor them.
+- **Ask user tool**: ask one or more structured questions and collect the answers in TUI or RPC mode.
+- **Web search and fetch**: search DuckDuckGo and fetch page content from a URL.
+- **Agent discovery**: browse and inspect the available agents with `/agents`.
+- **Commands browser**: list the registered slash commands with `/commands`.
+- **Session cost report**: view main-agent, subagent, nested, and combined token and cost totals with `/session-costs`.
+- **Automatic recaps**: recap completed work with a separate model. `/summary` saves the global model and thinking level in `~/.pi/agent/summary.json` (defaults: `openai/gpt-6-luna`, thinking `medium`), `/summary status` shows the saved values, and `/summary reset` restores the defaults. Each recap adds provider cost.
+- **Voice dictation**: choose a Foundry Local speech model with `/dictate model`, then run `/dictate` or press Control+Option+R to add speech to the editor.
+- **Six built-in agents**: generalist, oracle, scout, researcher, implementer, and reviewer.
+- **Workflow prompts**: templates for scouting, research, implementation, review, implementation review, and wiki generation.
 
 ## Installation
 
@@ -30,13 +27,15 @@ pi install git:github.com/theoklitosBam7/tb-pi-package
 # Or install per-project
 pi install -l git:github.com/theoklitosBam7/tb-pi-package
 
-# Or try without installing (current session only)
+# Or try without installing (current invocation only)
 pi -e git:github.com/theoklitosBam7/tb-pi-package
 ```
 
+`pi install` adds the package to your Pi settings. `pi -e` loads it for one invocation and caches it under `~/.pi/agent/tmp/extensions/`.
+
 ## Usage
 
-Once installed, the package's extensions, agents, prompts, and web-search skill are available automatically in pi.
+Once installed, the package's extensions, agents, prompts, and web-search skill are available in pi.
 
 Detailed guides live in [`docs/`](docs/):
 
@@ -49,57 +48,46 @@ Detailed guides live in [`docs/`](docs/):
 | [Subagent tool](docs/subagent-tool.md)             | Synchronous and asynchronous tasks, messages, reports, and limits |
 | [Agent inspector](docs/agent-inspector.md)         | Inspect synchronous and asynchronous agent runs                   |
 | [Portable inspection](docs/portable-inspection.md) | Read-only event bus contract for compatible hosts                 |
-| [Agent definitions](docs/agent-definitions.md)     | Agent files, built-in agents, AGENTS example                      |
+| [Agent definitions](docs/agent-definitions.md)     | Agent files and built-in agents                                   |
 | [Prompts](docs/prompts.md)                         | Workflow prompt templates                                         |
 | [Voice dictation](docs/voice-dictation.md)         | Foundry Local setup and `/dictate` usage                          |
 | [Session costs](docs/session-costs.md)             | `/session-costs` report and token accounting                      |
 | [Subagent overrides](docs/subagent-overrides.md)   | Per-agent `settings.json` overrides                               |
 
-## Project Structure
+## Project structure
 
-```
+```text
 tb-pi-package/
-├── agents/              # Agent definitions (Markdown with frontmatter)
-├── docs/                # Feature guides and ADRs
+├── agents/                # Agent definitions (Markdown with frontmatter)
+├── docs/                  # Feature guides, compatibility notes, and ADRs
 ├── extensions/
-│   ├── ask-user/        # ask_user questionnaire tool
-│   │   └── index.ts
-│   ├── commands.ts      # /commands slash command
-│   ├── lib/              # Shared extension helpers
-│   │   └── usage.ts      # Usage parsing and aggregation
-│   ├── list-agents.ts   # /agents command + list_agents tool
-│   ├── session-costs/   # /session-costs slash command
-│   │   └── index.ts
-│   ├── summary/         # Automatic recaps + /summary global configuration
-│   │   ├── config.ts    # Global summary settings storage
-│   │   └── index.ts     # Recap lifecycle, /summary command, and renderer
-│   ├── voice-dictation/ # /dictate Foundry Local microphone command
-│   ├── subagent/        # Agent tool (single/parallel/chain modes)
-│   │   ├── agents/      # Agent discovery and override loading
-│   │   ├── inspection/  # Subagent inspector and inspection publishing
-│   │   ├── rpc/         # Child process RPC peer
-│   │   ├── index.ts     # Subagent tool + TUI rendering
-│   │   ├── report.ts    # Child-to-parent reports
-│   │   ├── result.ts    # Result formatting and artifacts
-│   │   ├── run-manager.ts # Async run state and ownership
-│   │   └── test-support/ # Shared process helpers and fixtures
-│   └── web-search/      # web_search & web_fetch tools
-│       └── index.ts
-├── prompts/             # Workflow prompt templates
-├── skills/web-search/   # Web search guidance for the model
-│   └── SKILL.md
-├── .github/             # Issue/PR templates and release workflow
+│   ├── ask-user/          # ask_user questionnaire tool
+│   ├── commands.ts        # /commands slash command
+│   ├── lib/               # Helpers shared by more than one extension
+│   ├── list-agents.ts     # /agents command and list_agents tool
+│   ├── session-costs/     # /session-costs slash command
+│   ├── subagent/          # agent tool, async runs, reports, and inspector
+│   ├── summary/           # Automatic recaps and /summary configuration
+│   ├── voice-dictation/   # /dictate Foundry Local microphone command
+│   └── web-search/        # web_search and web_fetch tools
+├── prompts/               # Workflow prompt templates
+├── scripts/               # Minimum SDK version and SDK preparation helpers
+├── skills/web-search/     # Web search guidance for the model
+├── .github/               # Quality and compatibility workflows, templates
 ├── package.json
-└── tsconfig.json
+├── tsconfig.json
+└── tsconfig.tests.json
 ```
 
 ## Development
 
 ### Requirements
 
-- [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) — install separately before using this package
-- [Node.js](https://nodejs.org/) >= 22.22.3
-- [pnpm](https://pnpm.io/) v12.6.0
+- [pi](https://github.com/earendil-works/pi/tree/main/packages/coding-agent), installed separately. The supported Pi SDK versions are the peer dependency range in [`package.json`](package.json), explained in [SDK compatibility](docs/compatibility.md).
+- [Node.js](https://nodejs.org/) >= 22.22.3, the `engines` floor. Use the version in `.node-version` for development.
+- [pnpm](https://pnpm.io/), at the version in `packageManager`. pnpm switches to it automatically.
+
+`@types/node` stays on the 22 line, so the type checks reject APIs missing from the Node 22 typings, even though development uses the version in `.node-version`.
 
 ### Setup
 
@@ -121,8 +109,9 @@ pnpm test
 pnpm test:integration
 ```
 
-`pnpm test` runs the unit test suite.
-`pnpm test:integration` runs the marked HTTPS transport test, the Pi SDK event bus contract tests, and tests that start real child processes. Tests that start real child processes use the `[process integration]` marker. Tests that need POSIX process behavior also skip on Windows.
+`pnpm test` runs the unit test suite. `pnpm test:integration` runs the tests that need a real SDK or a real process: the HTTPS transport test, the Pi SDK event bus contract tests, and the tests marked `[process integration]`. Tests that need POSIX process behavior skip on Windows.
+
+The [Quality workflow](.github/workflows/quality.yml) runs the same checks on every pull request. The [Compatibility workflow](.github/workflows/compatibility.yml) installs the minimum Pi SDK from the peer range and runs the integration tests against it, on relevant pull requests and every week.
 
 ## Contributing
 

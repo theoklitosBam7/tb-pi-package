@@ -45,7 +45,3 @@ The package ships six agents in `agents/`. Each has a role and a tool set:
 | `researcher`  | `research`       | `read`, `rg`, `fd`, `ls`, `bash`, `web_search`, `web_fetch` | Answers external technical questions with traceable primary-source evidence |
 | `implementer` | `implementation` | Pi defaults                                                 | Implements a bounded task and reports tests and validation                  |
 | `reviewer`    | `review`         | `read`, `rg`, `fd`, `ls`, `bash`                            | Independently reviews diffs, plans, solutions, and bounded code areas       |
-
-## Agent instructions
-
-`.pi/AGENTS_example.md` is a starting point for `~/.pi/agent/AGENTS.md`. Copy it and adapt it to your workflow. The example is not loaded automatically because its filename is intentionally different.
