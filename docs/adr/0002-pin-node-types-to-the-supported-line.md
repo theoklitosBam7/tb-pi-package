@@ -6,4 +6,4 @@ The package supports Node 22.22.3 and newer through `engines.node`, and pi itsel
 
 We considered a CI job on Node 22.22.3 instead. It would catch runtime failures in tested code, but it would not stop the use of newer APIs before they are written, and it doubles CI time.
 
-The trade-off is that code which only runs in development, including tests and scripts, cannot use typings newer than the supported line. The 22 line also ends at 22.20.7, so a few APIs added in Node 22.21 and 22.22 are rejected. That is stricter than the floor and can be relaxed if it starts to block work.
+The trade-off is that code which only runs in development, including tests, cannot use typings newer than the supported line. The 22 line also ends at 22.20.7, so APIs added in later 22.x releases are rejected. That is stricter than the floor and can be relaxed if it starts to block work.

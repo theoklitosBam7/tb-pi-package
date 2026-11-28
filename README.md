@@ -9,7 +9,7 @@ Extensions, subagents, and workflow prompts for [pi](https://github.com/earendil
 
 - **Subagent tool**: delegate work to specialized agents with isolated context windows. Single, parallel, and chained runs are synchronous by default; single and parallel runs can also start asynchronously, so the parent can message and monitor them.
 - **Ask user tool**: ask one or more structured questions and collect the answers in TUI or RPC mode.
-- **Web search and fetch**: search DuckDuckGo and fetch page content from pi.
+- **Web search and fetch**: search DuckDuckGo and fetch page content from a URL.
 - **Agent discovery**: browse and inspect the available agents with `/agents`.
 - **Commands browser**: list the registered slash commands with `/commands`.
 - **Session cost report**: view main-agent, subagent, nested, and combined token and cost totals with `/session-costs`.
@@ -75,7 +75,8 @@ tb-pi-package/
 ├── skills/web-search/     # Web search guidance for the model
 ├── .github/               # Quality and compatibility workflows, templates
 ├── package.json
-└── tsconfig.json
+├── tsconfig.json
+└── tsconfig.tests.json
 ```
 
 ## Development
@@ -86,7 +87,7 @@ tb-pi-package/
 - [Node.js](https://nodejs.org/) >= 22.22.3, the `engines` floor. Use the version in `.node-version` for development.
 - [pnpm](https://pnpm.io/), at the version in `packageManager`. pnpm switches to it automatically.
 
-`@types/node` stays on the 22 line, so `pnpm typecheck` rejects APIs newer than Node 22 even though development uses the version in `.node-version`.
+`@types/node` stays on the 22 line, so the type checks reject APIs missing from the Node 22 typings, even though development uses the version in `.node-version`.
 
 ### Setup
 

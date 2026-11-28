@@ -71,7 +71,7 @@ export async function createReportServer(options: {
     socket.setTimeout(ackTimeoutMs, () => socket.destroy());
     let frame = Buffer.alloc(0);
     let completed = false;
-    socket.on("data", (chunk: Buffer) => {
+    socket.on("data", (chunk) => {
       if (completed) return;
       frame = Buffer.concat([frame, chunk]);
       if (frame.byteLength > MAX_FRAME_BYTES) {
@@ -245,7 +245,7 @@ async function submitReport(message: string): Promise<ReportDecision> {
     socket.once("connect", () => {
       socket.write(`${JSON.stringify({ runId, token, reportId: randomUUID(), message })}\n`);
     });
-    socket.on("data", (chunk: Buffer) => {
+    socket.on("data", (chunk) => {
       data = Buffer.concat([data, chunk]);
       if (data.byteLength > 1024) {
         socket.destroy();
